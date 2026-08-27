@@ -36,6 +36,8 @@ const saveStore = () => {
 
 const bot = new Bot(TOKEN);
 
+console.log("🔧 Доступные методы bot.api: " + Object.keys(bot.api ?? {}).join(", "));
+
 // ── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ────────────────────────────────
 function userIdOf(ctx) {
     return ctx.user?.user_id ?? 
@@ -74,20 +76,60 @@ function getPhoto(ctx) {
     return null;
 }
 
-// ── ОТПРАВКА В КАНАЛ ───────────────────────────────────────
+// ── ОТПРАВКА В КАНАЛ (перебирает все способы) ──────────────
 async function sendToChannel(text, attachments) {
     if (!CHANNEL_ID) {
         console.log("⚠️  Канал не подключён: не указан CHANNEL_ID");
         return false;
     }
-    try {
-        await bot.api.sendMessage({ chat_id: CHANNEL_ID, text, attachments });
-        console.log("📢 Объявление опубликовано в канале!");
-        return true;
-    } catch (err) {
-        console.log("❌ Не удалось отправить в канал:", err?.message ?? err);
-        return false;
+
+    const payload = { chat_id: CHANNEL_ID, text, attachments };
+
+    // Способ 1: методы библиотеки (если они существуют)
+    const methods = [];
+    if (typeof bot.api?.sendMessageToChat === "function") {
+        methods.push(["api.sendMessageToChat", () => bot.api.sendMessageToChat(payload)]);
     }
+    if (typeof bot.api?.sendMessage === "function") {
+        methods.push(["api.sendMessage", () => bot.api.sendMessage(payload)]);
+    }
+    if (typeof bot.sendMessage === "function") {
+        methods.push(["bot.sendMessage", () => bot.sendMessage(CHANNEL_ID, text, { attachments })]);
+    }
+
+    for (const [name, fn] of methods) {
+        try {
+            await fn();
+            console.log("📢 Объявление опубликовано в канале! (" + name + ")");
+            return true;
+        } catch (e) {
+            console.log("⚠️  " + name + " не сработал: " + (e?.message ?? e));
+        }
+    }
+
+    // Способ 2: напрямую в REST API MAX
+    const bases = ["https://platform-api2.max.ru", "https://botapi.max.ru"];
+    for (const base of bases) {
+        for (const auth of [TOKEN, "Bearer " + TOKEN]) {
+            try {
+                const res = await fetch(base + "/messages", {
+                    method: "POST",
+                    headers: { Authorization: auth, "Content-Type": "application/json" },
+                    body: JSON.stringify(payload),
+                });
+                if (res.ok) {
+                    console.log("📢 Объявление опубликовано в канале! (" + base + ")");
+                    return true;
+                }
+                console.log("⚠️  " + base + " ответил: " + res.status);
+            } catch (e) {
+                console.log("⚠️  " + base + " ошибка: " + (e?.message ?? e));
+            }
+        }
+    }
+
+    console.log("❌ Не удалось отправить в канал. Методы API: " + Object.keys(bot.api ?? {}).join(", "));
+    return false;
 }
 
 // ── ПРИВЕТСТВИЕ ────────────────────────────────────────────
@@ -451,7 +493,7 @@ async function finalizeListing(ctx, form, uid) {
         console.error("❌ Ошибка ответа продавцу:", err);
     }
     
-    // Публикуем в канал
+    // Публикуем в канал (сначала с фото, если не вышло — без фото)
     const channelAttachments = [itemButtons];
     if (newItem.photo && typeof newItem.photo === "object") {
         channelAttachments.unshift(newItem.photo);
