@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  Полная версия: каталог, купля, рейтинг, напоминания
+//  Полная версия + диагностика
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -20,7 +20,8 @@ let store = {
     pendingContacts: {},
     knownUsers: {},
     ratings: {},
-    starred: {}
+    starred: {},
+    probed: false
 };
 
 if (existsSync(STORE_FILE)) {
@@ -98,13 +99,31 @@ function cancelRow() {
     return [Keyboard.button.callback("❌ Отменить", "cancelform")];
 }
 
+// ── ОТВЕТ В ЛИЧКУ с запасными вариантами ───────────────────
 async function replyPrivate(ctx, uid, text, opts = {}) {
     try {
         await bot.api.sendMessageToUser(uid, text, opts);
+        return;
     } catch (e) {
-        try { await ctx.reply(text, opts); } catch (e2) {
-            console.log("⚠️  Не удалось ответить в личку: " + (e2?.message ?? e2));
-        }
+        console.log("⚠️  способ 1: " + (e?.message ?? e));
+    }
+    try {
+        await ctx.reply(text, opts);
+        return;
+    } catch (e2) {
+        console.log("⚠️  способ 2: " + (e2?.message ?? e2));
+    }
+    try {
+        await bot.api.sendMessageToUser(uid, text.replace(/\*/g, "").replace(/_/g, ""));
+        console.log("✅ ответил просто текстом");
+        return;
+    } catch (e3) {
+        console.log("⚠️  способ 3: " + (e3?.message ?? e3));
+    }
+    try {
+        await ctx.reply(text.replace(/\*/g, "").replace(/_/g, ""));
+    } catch (e4) {
+        console.log("⚠️  способ 4: " + (e4?.message ?? e4));
     }
 }
 
@@ -113,8 +132,13 @@ async function notifyUser(uid, text, opts = { format: "markdown" }) {
         await bot.api.sendMessageToUser(uid, text, opts);
         return true;
     } catch (e) {
-        console.log("⚠️  Не удалось уведомить пользователя " + uid);
-        return false;
+        try {
+            await bot.api.sendMessageToUser(uid, text.replace(/\*/g, ""));
+            return true;
+        } catch (e2) {
+            console.log("⚠️  Не удалось уведомить пользователя " + uid);
+            return false;
+        }
     }
 }
 
@@ -137,6 +161,30 @@ async function sendToChannel(text, libAttachments) {
         return true;
     } catch (e) { console.log("⚠️  Текст не вышло: " + (e?.message ?? e)); }
     return false;
+}
+
+// ── ДИАГНОСТИКА (один раз) ─────────────────────────────────
+async function runDiagnostics(uid) {
+    if (store.probed) return;
+    store.probed = true;
+    saveStore();
+    console.log("🔬 Начинаю диагностику...");
+    try {
+        await bot.api.sendMessageToUser(uid, "🔧 тест 1: простой текст");
+        console.log("✅ тест1 (простой текст) ок");
+    } catch (e) { console.log("❌ тест1: " + (e?.message ?? e)); }
+    try {
+        await bot.api.sendMessageToUser(uid, "🔧 тест 2: **жирный**", { format: "markdown" });
+        console.log("✅ тест2 (markdown) ок");
+    } catch (e) { console.log("❌ тест2: " + (e?.message ?? e)); }
+    try {
+        await bot.api.sendMessageToUser(uid, "🔧 тест 3: кнопки", { format: "markdown", attachments: [Keyboard.inlineKeyboard([[Keyboard.button.callback("Тест", "menu:back")]])] });
+        console.log("✅ тест3 (1 кнопка) ок");
+    } catch (e) { console.log("❌ тест3: " + (e?.message ?? e)); }
+    try {
+        await bot.api.sendMessageToUser(uid, "🔧 тест 4: две кнопки в ряд", { format: "markdown", attachments: [Keyboard.inlineKeyboard([[Keyboard.button.callback("А", "menu:back"), Keyboard.button.callback("Б", "menu:help")]])] });
+        console.log("✅ тест4 (2 кнопки в ряд) ок");
+    } catch (e) { console.log("❌ тест4: " + (e?.message ?? e)); }
 }
 
 // ── ПРИВЕТСТВИЕ ────────────────────────────────────────────
@@ -164,6 +212,8 @@ bot.action(/^cancelform$/, async (ctx) => {
 bot.action(/^menu:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
+
+    await runDiagnostics(uid);
 
     // ПРОДАТЬ
     if (action === "sell") {
@@ -236,7 +286,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     }
 });
 
-// ── ПРОСМОТР ОБЪЯВЛЕНИЯ ИЗ КАТАЛОГА ────────────────────────
+// ── ПРОСМОТР ИЗ КАТАЛОГА ───────────────────────────────────
 bot.action(/^view:(\d+)$/, async (ctx) => {
     const id = Number(ctx.match[1]);
     const uid = userIdOf(ctx);
@@ -368,11 +418,10 @@ bot.hears(/.*/, async (ctx) => {
             if (item && digits.length >= 10) {
                 delete store.pendingContacts[uid];
                 saveStore();
-                const who = item.type === "buy" ? "покупатель" : "продавец";
                 await notifyUser(item.sellerId,
-                    `🔔 **Отклик по объявлению!**\n\n${item.type === "buy" ? "📦 Кто-то продаёт то, что ты ищешь" : `📦 Объявление: «${item.title}»`}\n👤 ${item.type === "buy" ? "Откликнулся" : "Покупатель"}: ${pc.name}\n📞 Телефон: ${text.trim()}\n\n_Позвони или напиши!_`);
-                let answer = `✅ Готово! ${who === "покупатель" ? "Покупатель" : "Продавец"} получил твой телефон и свяжется с тобой.`;
-                if (item.phone) answer += `\n\n📞 Телефон ${who}а: ${item.phone}`;
+                    `🔔 **Отклик по объявлению!**\n\n${item.type === "buy" ? "📦 Кто-то продаёт то, что ты ищешь" : `📦 Объявление: «${item.title}»`}\n👤 Откликнулся: ${pc.name}\n📞 Телефон: ${text.trim()}\n\n_Позвони или напиши!_`);
+                let answer = "✅ Готово! Твой телефон передан. С тобой свяжутся.";
+                if (item.phone) answer += `\n\n📞 Телефон второй стороны: ${item.phone}`;
                 await ctx.reply(answer, { format: "markdown" });
                 return;
             }
@@ -475,14 +524,12 @@ bot.hears(/.*/, async (ctx) => {
     // ШАГ: МЕСТО
     if (form.step === "location") {
         form.location = text.trim();
+        form.step = "phone";
         saveStore();
+        const phoneMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("⏭️ Пропустить", "phone:skip")], cancelRow()]);
         if (form.type === "sell") {
-            form.step = "phone";
-            const phoneMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("⏭️ Пропустить", "phone:skip")], cancelRow()]);
             await ctx.reply(`✅ Место: **${form.location}**\n\n**Шаг 5 из 7:** Оставь телефон для связи\n\n_Покупатели смогут позвонить. Напиши номер или «Пропустить»_`, { format: "markdown", attachments: [phoneMenu] });
         } else {
-            form.step = "phone";
-            const phoneMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("⏭️ Пропустить", "phone:skip")], cancelRow()]);
             await ctx.reply(`✅ Место: **${form.location}**\n\n**Шаг 4 из 5:** Оставь телефон для связи\n\n_Напиши номер или «Пропустить»_`, { format: "markdown", attachments: [phoneMenu] });
         }
         return;
@@ -557,7 +604,7 @@ async function finalizeListing(ctx, form, uid) {
         isBuy ? "🔍 **ОБЪЯВЛЕНИЕ «КУПЛЮ»**" : "📦 **НОВОЕ ОБЪЯВЛЕНИЕ**",
         "",
         `🏷️ **${newItem.title}**`,
-        isBuy ? `💰 **Цена:** ${priceLine}` : `💰 **Цена:** ${priceLine}`,
+        `💰 **Цена:** ${priceLine}`,
         `📝 **Описание:** ${newItem.description}`,
         `📍 **Где:** ${newItem.location}`,
         newItem.phone ? `📞 **Телефон:** ${newItem.phone}` : null,
@@ -616,7 +663,7 @@ bot.action(/^contact:(\d+)$/, async (ctx) => {
     const isBuy = item.type === "buy";
     let msg = `📦 **${item.title}**\n👤 ${isBuy ? "Покупатель" : "Продавец"}: ${item.sellerName}${ratingOf(item.sellerId)}\n📍 Где: ${item.location}\n`;
     if (item.phone) msg += `\n📞 **Телефон: ${item.phone}**\nМожно просто позвонить!\n`;
-    msg += `\n_Чтобы ${isBuy ? "покупатель" : "продавец"} знал, кто интересуется, оставь свой телефон — я передам:_`;
+    msg += `\n_Оставь свой телефон — я передам его, чтобы вы связались:_`;
 
     store.pendingContacts[uid] = { itemId, name: userNameOf(ctx) };
     saveStore();
@@ -697,8 +744,9 @@ function checkReminders() {
 }
 
 bot.action(/^remind:(yes|no):(\d+)$/, async (ctx) => {
-    const [, answer, idStr] = ctx.match;
-    const id = Number(idStr);
+    const answer = ctx.match[1];
+    const id = Number(ctx.match[2]);
+    const uid = userIdOf(ctx);
     const item = store.items.find(i => i.id === id);
     if (!item) return;
 
@@ -706,11 +754,11 @@ bot.action(/^remind:(yes|no):(\d+)$/, async (ctx) => {
         item.createdAt = Date.now();
         item.reminded = false;
         saveStore();
-        await replyPrivate(ctx, uidOf(ctx), "Отлично! Объявление остаётся в канале ещё на 7 дней. 🙌", { format: "markdown" });
+        await replyPrivate(ctx, uid, "Отлично! Объявление остаётся в канале ещё на 7 дней. 🙌", { format: "markdown" });
     } else {
         item.status = "sold";
         saveStore();
-        await replyPrivate(ctx, uidOf(ctx), "✅ Объявление снято с публикации. Удачи! 🍀", { format: "markdown" });
+        await replyPrivate(ctx, uid, "✅ Объявление снято с публикации. Удачи! 🍀", { format: "markdown" });
     }
 });
 
@@ -729,7 +777,7 @@ process.on("unhandledRejection", (err) => {
     console.error("⚠️ Ошибка:", err);
 });
 
-console.log("🚀 Барахолка «У соседа» (Бояркино) — полная версия запускается…");
+console.log("🚀 Барахолка «У соседа» (Бояркино) — полная версия с диагностикой…");
 checkReminders();
 setInterval(checkReminders, 60 * 60 * 1000);
 bot.start();
