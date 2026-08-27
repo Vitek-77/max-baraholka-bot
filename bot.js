@@ -474,3 +474,13 @@ process.on("unhandledRejection", (err) => {
 console.log("🚀 Барахолка-бот запускается…");
 console.log("   Отправьте боту /start в MAX для проверки.");
 bot.start();
+
+// ── ВЕБ-СЕРВЕР (чтобы Render не усыплял бота) ─────────────
+const http = await import("node:http");
+const port = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("Барахолка-бот работает! ✅");
+}).listen(port, () => {
+  console.log("🌐 Веб-сервер запущен на порту " + port);
+});
