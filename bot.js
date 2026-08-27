@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  СТАБИЛЬНАЯ + даром + редактирование + обновление поста в канале
+//  ФИНАЛЬНАЯ: даром + редактирование + обновление поста в канале
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -99,6 +99,20 @@ async function replyPrivate(ctx, uid, text, opts = {}) {
     }
 }
 
+// Ищем ID сообщения в ответе MAX (перебираем все варианты)
+function extractMid(res) {
+    if (!res) return null;
+    return res.message?.mid ??
+           res.message?.message_id ??
+           res.message?.id ??
+           res.mid ??
+           res.message_id ??
+           res.id ??
+           res.payload?.mid ??
+           res.body?.message?.mid ??
+           null;
+}
+
 // ── ТЕКСТ И КНОПКИ ПОСТА ДЛЯ КАНАЛА ────────────────────────
 function buildChannelText(item) {
     return [
@@ -157,10 +171,6 @@ async function sendToChannel(text, libAttachments) {
     return null;
 }
 
-function extractMid(res) {
-    return res?.message?.mid ?? res?.mid ?? res?.message?.message_id ?? res?.message_id ?? null;
-}
-
 // ── ОБНОВЛЕНИЕ ПОСТА В КАНАЛЕ ──────────────────────────────
 async function updateChannelPost(item) {
     if (!item.channelMsgId) {
@@ -172,7 +182,7 @@ async function updateChannelPost(item) {
 
     // Попытка 1: отредактировать пост
     const editVariants = [
-        ["edit (id, mid, obj)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [...item.photos, buttons] })],
+        ["edit (id, mid, фото+кнопки)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [...item.photos, buttons] })],
         ["edit (id, mid, кнопки)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [buttons] })],
         ["edit (объектом)", () => bot.api.editMessage({ chat_id: CHANNEL_ID, message_id: item.channelMsgId, text, attachments: [buttons] })],
     ];
@@ -558,6 +568,7 @@ async function finalizeListing(ctx, form, uid) {
     }
     
     const res = await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
+    console.log("📦 Ответ MAX: " + JSON.stringify(res)?.slice(0, 400));
     const mid = extractMid(res);
     console.log("🆔 mid поста в канале: " + mid);
     if (mid) {
@@ -566,10 +577,6 @@ async function finalizeListing(ctx, form, uid) {
     }
     
     console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length})`);
-}
-
-function extractMid(res) {
-    return res?.message?.mid ?? res?.mid ?? res?.message?.message_id ?? res?.message_id ?? null;
 }
 
 // ── КНОПКИ ПОД ОБЪЯВЛЕНИЯМИ ────────────────────────────────
