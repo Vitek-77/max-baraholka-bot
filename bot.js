@@ -7,7 +7,7 @@ import { Bot, Keyboard } from "@maxhub/max-bot-api";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 // ── НАСТРОЙКИ ──────────────────────────────────────────────
-const TOKEN = "f9LHodD0cOKyqU1S991T_GLVw4BLaC2yBErr20zg_SCWb6lvNZFBgOQM2lYtXmOHcSDFO02DYKVv1bySe8ZZ";
+const TOKEN = process.env.BOT_TOKEN;
 const OWNER_IDS = [];
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
