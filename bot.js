@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  СТАБИЛЬНАЯ + "Отдам даром" + редактирование объявлений
+//  СТАБИЛЬНАЯ + даром + редактирование + обновление поста в канале
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -157,6 +157,10 @@ async function sendToChannel(text, libAttachments) {
     return null;
 }
 
+function extractMid(res) {
+    return res?.message?.mid ?? res?.mid ?? res?.message?.message_id ?? res?.message_id ?? null;
+}
+
 // ── ОБНОВЛЕНИЕ ПОСТА В КАНАЛЕ ──────────────────────────────
 async function updateChannelPost(item) {
     if (!item.channelMsgId) {
@@ -165,24 +169,48 @@ async function updateChannelPost(item) {
     }
     const text = buildChannelText(item);
     const buttons = buildChannelButtons(item);
-    const variants = [
-        ["с фото", [...item.photos, buttons]],
-        ["без фото", [buttons]],
+
+    // Попытка 1: отредактировать пост
+    const editVariants = [
+        ["edit (id, mid, obj)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [...item.photos, buttons] })],
+        ["edit (id, mid, кнопки)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [buttons] })],
+        ["edit (объектом)", () => bot.api.editMessage({ chat_id: CHANNEL_ID, message_id: item.channelMsgId, text, attachments: [buttons] })],
     ];
-    for (const [name, att] of variants) {
+    for (const [name, fn] of editVariants) {
         try {
-            await bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: att });
+            await fn();
             console.log("✏️ Пост в канале обновлён! (" + name + ")");
             return;
         } catch (e) {
-            console.log("⚠️  edit (" + name + "): " + (e?.message ?? e));
+            console.log("⚠️  " + name + ": " + (e?.message ?? e));
         }
     }
-    try {
-        await bot.api.editMessage({ chat_id: CHANNEL_ID, message_id: item.channelMsgId, text, attachments: [buttons] });
-        console.log("✏️ Пост в канале обновлён! (объектом)");
-    } catch (e) {
-        console.log("⚠️  Пост в канале не обновился — свежие данные в боте. " + (e?.message ?? e));
+
+    // Попытка 2: удалить старый пост и опубликовать новый
+    let deleted = false;
+    const delVariants = [
+        ["delete (id, mid)", () => bot.api.deleteMessage(CHANNEL_ID, item.channelMsgId)],
+        ["delete (объектом)", () => bot.api.deleteMessage({ chat_id: CHANNEL_ID, message_id: item.channelMsgId })],
+    ];
+    for (const [name, fn] of delVariants) {
+        try {
+            await fn();
+            deleted = true;
+            console.log("🗑 Старый пост удалён (" + name + ")");
+            break;
+        } catch (e) {
+            console.log("⚠️  " + name + ": " + (e?.message ?? e));
+        }
+    }
+
+    const res = await sendToChannel(text, [...item.photos, buttons]);
+    const mid = extractMid(res);
+    if (mid) {
+        item.channelMsgId = mid;
+        saveStore();
+        console.log("📢 Опубликован обновлённый пост! mid: " + mid + (deleted ? " (старый удалён)" : " (старый остался выше)"));
+    } else {
+        console.log("⚠️  Пост в канале не обновился — свежие данные только в боте");
     }
 }
 
@@ -530,13 +558,18 @@ async function finalizeListing(ctx, form, uid) {
     }
     
     const res = await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
-    const mid = res?.message?.mid ?? res?.mid ?? null;
+    const mid = extractMid(res);
+    console.log("🆔 mid поста в канале: " + mid);
     if (mid) {
         newItem.channelMsgId = mid;
         saveStore();
     }
     
     console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length})`);
+}
+
+function extractMid(res) {
+    return res?.message?.mid ?? res?.mid ?? res?.message?.message_id ?? res?.message_id ?? null;
 }
 
 // ── КНОПКИ ПОД ОБЪЯВЛЕНИЯМИ ────────────────────────────────
