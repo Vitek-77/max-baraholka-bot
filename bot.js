@@ -1,6 +1,5 @@
 // ============================================================
-//  🛒 БАРАХОЛКА-БОТ для мессенджера MAX
-//  Версия с автоприветствием
+//  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -8,17 +7,18 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 // ── НАСТРОЙКИ ──────────────────────────────────────────────
 const TOKEN = process.env.BOT_TOKEN;
-const OWNER_IDS = [];
+
+// ID канала, куда бот публикует объявления
+const CHANNEL_ID = -78241752722859;
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
 const STORE_FILE = new URL("./store.json", import.meta.url);
 let store = { 
     ownerId: null, 
-    channelId: null, 
     nextId: 1, 
     items: [],
     activeForms: {},
-    knownUsers: {} // Храним ID пользователей, которые уже видели приветствие
+    knownUsers: {}
 };
 
 if (existsSync(STORE_FILE)) {
@@ -26,7 +26,7 @@ if (existsSync(STORE_FILE)) {
         store = { ...store, ...JSON.parse(readFileSync(STORE_FILE, "utf8")) };
         console.log("📁 Загружено сохранение барахолки");
     } catch {
-        console.warn("️  store.json повреждён");
+        console.warn("⚠️  store.json повреждён");
     }
 }
 
@@ -36,7 +36,7 @@ const saveStore = () => {
 
 const bot = new Bot(TOKEN);
 
-// ── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ───────────────────────────────
+// ── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ────────────────────────────────
 function userIdOf(ctx) {
     return ctx.user?.user_id ?? 
            ctx.callback?.user?.user_id ?? 
@@ -53,18 +53,10 @@ function userNameOf(ctx) {
 }
 
 function getText(ctx) {
-    if (ctx.text && typeof ctx.text === "string") {
-        return ctx.text;
-    }
-    if (ctx.message?.text && typeof ctx.message.text === "string") {
-        return ctx.message.text;
-    }
-    if (ctx.message?.body?.text && typeof ctx.message.body.text === "string") {
-        return ctx.message.body.text;
-    }
-    if (ctx.body?.text && typeof ctx.body.text === "string") {
-        return ctx.body.text;
-    }
+    if (ctx.text && typeof ctx.text === "string") return ctx.text;
+    if (ctx.message?.text && typeof ctx.message.text === "string") return ctx.message.text;
+    if (ctx.message?.body?.text && typeof ctx.message.body.text === "string") return ctx.message.body.text;
+    if (ctx.body?.text && typeof ctx.body.text === "string") return ctx.body.text;
     return "";
 }
 
@@ -82,9 +74,25 @@ function getPhoto(ctx) {
     return null;
 }
 
-// ── ФУНКЦИЯ ПРИВЕТСТВИЯ ────────────────────────────────────
+// ── ОТПРАВКА В КАНАЛ ───────────────────────────────────────
+async function sendToChannel(text, attachments) {
+    if (!CHANNEL_ID) {
+        console.log("⚠️  Канал не подключён: не указан CHANNEL_ID");
+        return false;
+    }
+    try {
+        await bot.api.sendMessage({ chat_id: CHANNEL_ID, text, attachments });
+        console.log("📢 Объявление опубликовано в канале!");
+        return true;
+    } catch (err) {
+        console.log("❌ Не удалось отправить в канал:", err?.message ?? err);
+        return false;
+    }
+}
+
+// ── ПРИВЕТСТВИЕ ────────────────────────────────────────────
 async function sendWelcome(ctx, name) {
-    const welcomeText = `Привет, ${name}! 👋\n\nЯ бот «Барахолка» — помогу продать или купить вещи.\n\nЧто хочешь сделать?`;
+    const welcomeText = `Привет, ${name}! 👋\n\nЯ бот барахолки «У соседа» — Бояркино и окрестности.\nЗдесь соседи продают, покупают и меняются вещами.\n\nЧто хочешь сделать?`;
     
     const mainMenu = Keyboard.inlineKeyboard([
         [Keyboard.button.callback("📦 Продать вещь", "menu:sell")],
@@ -98,8 +106,6 @@ async function sendWelcome(ctx, name) {
     });
 }
 
-// ── ГЛАВНОЕ МЕНЮ ──────────────────────────────────────────
-
 bot.command("start", async (ctx) => {
     const uid = userIdOf(ctx);
     const name = userNameOf(ctx);
@@ -109,7 +115,6 @@ bot.command("start", async (ctx) => {
         saveStore();
     }
     
-    // Помечаем пользователя как знакомого
     store.knownUsers[uid] = true;
     saveStore();
     
@@ -133,7 +138,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
         saveStore();
         
         await ctx.reply(
-            "📝 **Создание объявления**\n\n**Шаг 1 из 5:** Что продаёте?\n\n_Напиши название товара_",
+            "📝 **Создание объявления**\n\n**Шаг 1 из 6:** Что продаёте?\n\n_Напиши название товара_",
             { format: "markdown" }
         );
         return;
@@ -166,7 +171,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
         ]);
         
         await ctx.reply(
-            "❓ **Как пользоваться ботом:**\n\n1️⃣ Нажми «Продать вещь»\n2️⃣ Ответь на вопросы бота\n3️⃣ Прикрепи фото товара\n4️⃣ Бот создаст красивое объявление\n5️⃣ Покупатели смогут связаться с тобой\n\nМожно отменить создание, написав `/отмена`",
+            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Продать вещь»\n2️⃣ Ответь на 6 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут написать тебе\n\nОтменить создание можно, написав `/отмена`",
             { format: "markdown", attachments: [backMenu] }
         );
         return;
@@ -179,7 +184,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
         }
         
         const mainMenu = Keyboard.inlineKeyboard([
-            [Keyboard.button.callback(" Продать вещь", "menu:sell")],
+            [Keyboard.button.callback("📦 Продать вещь", "menu:sell")],
             [Keyboard.button.callback("📋 Мои объявления", "menu:my_items")],
             [Keyboard.button.callback("❓ Помощь", "menu:help")]
         ]);
@@ -192,16 +197,14 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     }
 });
 
-// ── ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ──────────────────────────────
+// ── ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ───────────────────────────────
 
 bot.hears(/.*/, async (ctx) => {
     const uid = userIdOf(ctx);
     const text = getText(ctx);
     const photo = getPhoto(ctx);
     
-    // Если пользователь НЕ в процессе заполнения формы
     if (!store.activeForms[uid]) {
-        // Если это новый пользователь (не в knownUsers) — показываем приветствие
         if (!store.knownUsers[uid]) {
             const name = userNameOf(ctx);
             store.knownUsers[uid] = true;
@@ -210,14 +213,13 @@ bot.hears(/.*/, async (ctx) => {
             return;
         }
         
-        // Если пользователь уже знакомый — показываем меню
         const mainMenu = Keyboard.inlineKeyboard([
             [Keyboard.button.callback("📦 Продать вещь", "menu:sell")],
             [Keyboard.button.callback("📋 Мои объявления", "menu:my_items")],
             [Keyboard.button.callback("❓ Помощь", "menu:help")]
         ]);
         
-        await ctx.reply("Используй кнопки ниже ", { 
+        await ctx.reply("Используй кнопки ниже 👇", { 
             format: "markdown", 
             attachments: [mainMenu] 
         });
@@ -226,7 +228,7 @@ bot.hears(/.*/, async (ctx) => {
     
     const form = store.activeForms[uid];
     
-    // Обработка фото на шаге 4
+    // Шаг 5: Фото
     if (form.step === "photo" && photo) {
         form.photo = photo;
         form.step = "confirm";
@@ -238,7 +240,7 @@ bot.hears(/.*/, async (ctx) => {
         ]);
         
         await ctx.reply(
-            `✅ Фото получено!\n\n**Предпросмотр объявления:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${form.price} ₽\n📝 **Описание:** ${form.description}\n📷 **Фото:** прикреплено\n\n**Шаг 5 из 5:** Подтверди публикацию:`,
+            `✅ Фото получено!\n\n**Предпросмотр:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${form.price} ₽\n📝 **Описание:** ${form.description}\n📍 **Где:** ${form.location}\n📷 **Фото:** есть\n\n**Шаг 6 из 6:** Подтверди публикацию:`,
             { format: "markdown", attachments: [confirmMenu] }
         );
         return;
@@ -247,6 +249,19 @@ bot.hears(/.*/, async (ctx) => {
     if (typeof text === "string" && text.startsWith("/")) return;
     if (!text || typeof text !== "string") return;
     
+    // Отмена
+    if (text.toLowerCase() === "отмена") {
+        delete store.activeForms[uid];
+        saveStore();
+        const mainMenu = Keyboard.inlineKeyboard([
+            [Keyboard.button.callback("📦 Продать вещь", "menu:sell")],
+            [Keyboard.button.callback("📋 Мои объявления", "menu:my_items")],
+            [Keyboard.button.callback("❓ Помощь", "menu:help")]
+        ]);
+        await ctx.reply("❌ Создание объявления отменено.", { format: "markdown", attachments: [mainMenu] });
+        return;
+    }
+    
     // Шаг 1: Название
     if (form.step === "title") {
         form.title = text.trim();
@@ -254,7 +269,7 @@ bot.hears(/.*/, async (ctx) => {
         saveStore();
         
         await ctx.reply(
-            `✅ Название: **${form.title}**\n\n**Шаг 2 из 5:** Какая цена?\n\n_Напиши цену в рублях (например: 5000)_`,
+            `✅ Название: **${form.title}**\n\n**Шаг 2 из 6:** Какая цена?\n\n_Напиши цену в рублях (например: 5000)_`,
             { format: "markdown" }
         );
         return;
@@ -276,7 +291,7 @@ bot.hears(/.*/, async (ctx) => {
         saveStore();
         
         await ctx.reply(
-            `✅ Цена: **${form.price} ₽**\n\n**Шаг 3 из 5:** Описание товара\n\n_Напиши состояние, комплектацию и другие детали_`,
+            `✅ Цена: **${form.price} ₽**\n\n**Шаг 3 из 6:** Описание товара\n\n_Напиши состояние, комплектацию и другие детали_`,
             { format: "markdown" }
         );
         return;
@@ -285,6 +300,19 @@ bot.hears(/.*/, async (ctx) => {
     // Шаг 3: Описание
     if (form.step === "description") {
         form.description = text.trim();
+        form.step = "location";
+        saveStore();
+        
+        await ctx.reply(
+            `✅ Описание сохранено\n\n**Шаг 4 из 6:** Где ты находишься?\n\n_Напиши деревню или СНТ (например: д. Бояркино или СНТ "Берёзка")_`,
+            { format: "markdown" }
+        );
+        return;
+    }
+    
+    // Шаг 4: Местоположение
+    if (form.step === "location") {
+        form.location = text.trim();
         form.step = "photo";
         saveStore();
         
@@ -293,7 +321,7 @@ bot.hears(/.*/, async (ctx) => {
         ]);
         
         await ctx.reply(
-            `✅ Описание сохранено\n\n**Шаг 4 из 5:** Прикрепи фото товара\n\n_Отправь фотографию или нажми кнопку ниже, чтобы пропустить_`,
+            `✅ Место: **${form.location}**\n\n**Шаг 5 из 6:** Прикрепи фото товара\n\n_Отправь фотографию или нажми кнопку, чтобы пропустить_`,
             { format: "markdown", attachments: [skipPhotoMenu] }
         );
         return;
@@ -301,7 +329,7 @@ bot.hears(/.*/, async (ctx) => {
     
     if (form.step === "photo") {
         await ctx.reply(
-            "⚠️ Я не вижу фото. Пожалуйста, отправь фотографию товара или нажми кнопку «Пропустить фото»",
+            "⚠️ Я не вижу фото. Отправь фотографию товара или нажми кнопку «Пропустить фото»",
             { format: "markdown" }
         );
         return;
@@ -326,13 +354,13 @@ bot.action(/^photo:(.+)$/, async (ctx) => {
         ]);
         
         await ctx.reply(
-            `⏭️ Фото пропущено\n\n**Предпросмотр объявления:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${form.price} ₽\n📝 **Описание:** ${form.description}\n📷 **Фото:** нет\n\n**Шаг 5 из 5:** Подтверди публикацию:`,
+            `⏭️ Фото пропущено\n\n**Предпросмотр:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${form.price} ₽\n📝 **Описание:** ${form.description}\n📍 **Где:** ${form.location}\n\n**Шаг 6 из 6:** Подтверди публикацию:`,
             { format: "markdown", attachments: [confirmMenu] }
         );
     }
 });
 
-// ── КНОПКИ ПОДТВЕРЖДЕНИЯ / ОТМЕНЫ ────────────────────────
+// ── ПОДТВЕРЖДЕНИЕ / ОТМЕНА ─────────────────────────────────
 
 bot.action(/^publish:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
@@ -345,7 +373,7 @@ bot.action(/^publish:(.+)$/, async (ctx) => {
         }
         
         const mainMenu = Keyboard.inlineKeyboard([
-            [Keyboard.button.callback(" Продать вещь", "menu:sell")],
+            [Keyboard.button.callback("📦 Продать вещь", "menu:sell")],
             [Keyboard.button.callback("📋 Мои объявления", "menu:my_items")],
             [Keyboard.button.callback("❓ Помощь", "menu:help")]
         ]);
@@ -362,7 +390,7 @@ bot.action(/^publish:(.+)$/, async (ctx) => {
     }
 });
 
-// ── ФИНАЛИЗАЦИЯ ОБЪЯВЛЕНИЯ С ФОТО ──────────────────────────
+// ── ФИНАЛИЗАЦИЯ ОБЪЯВЛЕНИЯ ─────────────────────────────────
 
 async function finalizeListing(ctx, form, uid) {
     const newItem = {
@@ -372,6 +400,7 @@ async function finalizeListing(ctx, form, uid) {
         title: form.title,
         price: form.price,
         description: form.description,
+        location: form.location || "не указано",
         photo: form.photo || null,
         status: "active",
         createdAt: Date.now(),
@@ -381,45 +410,59 @@ async function finalizeListing(ctx, form, uid) {
     delete store.activeForms[uid];
     saveStore();
     
-    let messageText = [
+    // Текст для продавца (в личку)
+    const privateText = [
         "📦 **НОВОЕ ОБЪЯВЛЕНИЕ**",
         "",
         `🏷️ **${newItem.title}**`,
         `💰 **Цена:** ${newItem.price} ₽`,
-        ` **Описание:** ${newItem.description}`,
+        `📝 **Описание:** ${newItem.description}`,
+        `📍 **Где:** ${newItem.location}`,
         `👤 **Продавец:** ${newItem.sellerName}`,
         "",
-        ` №${newItem.id}`
+        `🆔 №${newItem.id}`
     ].join("\n");
     
-    if (newItem.photo) {
-        messageText += "\n\n **Фото:** прикреплено";
-    }
+    // Текст для канала (без markdown)
+    const channelText = [
+        "📦 НОВОЕ ОБЪЯВЛЕНИЕ",
+        "",
+        `🏷️ ${newItem.title}`,
+        `💰 Цена: ${newItem.price} ₽`,
+        `📝 Описание: ${newItem.description}`,
+        `📍 Где: ${newItem.location}`,
+        `👤 Продавец: ${newItem.sellerName}`,
+        "",
+        `🆔 №${newItem.id}`
+    ].join("\n");
     
     const itemButtons = Keyboard.inlineKeyboard([
         [Keyboard.button.callback("💬 Написать продавцу", `contact:${newItem.id}`)],
-        [Keyboard.button.callback("✅ Продано", `sold:${newItem.id}`)],
-        [Keyboard.button.callback("🔙 В главное меню", "menu:back")]
+        [Keyboard.button.callback("✅ Продано", `sold:${newItem.id}`)]
     ]);
     
-    const attachments = [itemButtons];
-    
-    if (newItem.photo && typeof newItem.photo === "object") {
-        attachments.unshift(newItem.photo);
-    }
-    
+    // Отвечаем продавцу в личку
     try {
-        await ctx.reply(messageText, { 
+        await ctx.reply(privateText, { 
             format: "markdown",
-            attachments: attachments
+            attachments: [itemButtons]
         });
-        
-        console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title}`);
-        
     } catch (err) {
-        console.error("❌ Ошибка:", err);
-        await ctx.reply("❌ Не удалось опубликовать объявление.");
+        console.error("❌ Ошибка ответа продавцу:", err);
     }
+    
+    // Публикуем в канал
+    const channelAttachments = [itemButtons];
+    if (newItem.photo && typeof newItem.photo === "object") {
+        channelAttachments.unshift(newItem.photo);
+    }
+    
+    const ok = await sendToChannel(channelText, channelAttachments);
+    if (!ok) {
+        await sendToChannel(channelText, [itemButtons]);
+    }
+    
+    console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title}`);
 }
 
 // ── КНОПКИ ПОД ОБЪЯВЛЕНИЯМИ ────────────────────────────────
@@ -432,13 +475,9 @@ bot.action(/^contact:(\d+)$/, async (ctx) => {
         return ctx.reply("Это объявление уже не активно.");
     }
     
-    const backMenu = Keyboard.inlineKeyboard([
-        [Keyboard.button.callback("🔙 Назад в меню", "menu:back")]
-    ]);
-    
     await ctx.reply(
-        ` **Связь с продавцом**\n\nТовар: **${item.title}**\nПродавец: ${item.sellerName}\nID продавца: \`${item.sellerId}\`\n\n_Напиши продавцу в личные сообщения_`,
-        { format: "markdown", attachments: [backMenu] }
+        `📞 **Связь с продавцом**\n\nТовар: **${item.title}**\n📍 Где: ${item.location}\nПродавец: ${item.sellerName}\nID продавца: \`${item.sellerId}\`\n\n_Напиши продавцу в личные сообщения в MAX_`,
+        { format: "markdown" }
     );
 });
 
@@ -455,14 +494,20 @@ bot.action(/^sold:(\d+)$/, async (ctx) => {
     item.status = "sold";
     saveStore();
     
-    const backMenu = Keyboard.inlineKeyboard([
-        [Keyboard.button.callback("🔙 Назад в меню", "menu:back")]
-    ]);
-    
     await ctx.reply(
         `✅ Объявление №${itemId} отмечено как проданное!`,
-        { format: "markdown", attachments: [backMenu] }
+        { format: "markdown" }
     );
+});
+
+// ── ВЕБ-СЕРВЕР (чтобы Render не усыплял бота) ──────────────
+const http = await import("node:http");
+const port = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+  res.end("Барахолка «У соседа» работает! ✅");
+}).listen(port, () => {
+  console.log("🌐 Веб-сервер запущен на порту " + port);
 });
 
 // ── ЗАПУСК ─────────────────────────────────────────────────
@@ -471,16 +516,5 @@ process.on("unhandledRejection", (err) => {
     console.error("⚠️ Ошибка:", err);
 });
 
-console.log("🚀 Барахолка-бот запускается…");
-console.log("   Отправьте боту /start в MAX для проверки.");
+console.log("🚀 Барахолка «У соседа» (Бояркино) запускается…");
 bot.start();
-
-// ── ВЕБ-СЕРВЕР (чтобы Render не усыплял бота) ─────────────
-const http = await import("node:http");
-const port = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end("Барахолка-бот работает! ✅");
-}).listen(port, () => {
-  console.log("🌐 Веб-сервер запущен на порту " + port);
-});
