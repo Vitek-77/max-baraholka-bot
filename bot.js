@@ -60,18 +60,20 @@ function getText(ctx) {
     return "";
 }
 
-function getPhoto(ctx) {
-    if (ctx.message?.photo) return ctx.message.photo;
-    if (ctx.message?.attachments) {
-        const photo = ctx.message.attachments.find(a => a.type === "photo" || a.type === "image");
-        if (photo) return photo;
+// Возвращает ВСЕ фото из сообщения (массив)
+function getPhotos(ctx) {
+    const photos = [];
+    if (ctx.message?.photo) photos.push(ctx.message.photo);
+    if (ctx.photo) photos.push(ctx.photo);
+    const sources = [ctx.message?.attachments, ctx.message?.body?.attachments, ctx.attachments];
+    for (const src of sources) {
+        if (Array.isArray(src)) {
+            for (const a of src) {
+                if (a && (a.type === "photo" || a.type === "image")) photos.push(a);
+            }
+        }
     }
-    if (ctx.photo) return ctx.photo;
-    if (ctx.message?.body?.attachments) {
-        const photo = ctx.message.body.attachments.find(a => a.type === "photo" || a.type === "image");
-        if (photo) return photo;
-    }
-    return null;
+    return photos;
 }
 
 // Ответ ВСЕГДА в личку пользователю (даже если кнопка нажата в канале)
@@ -165,6 +167,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
             step: "title",
             name: name,
             userId: uid,
+            photos: [],
             createdAt: Date.now()
         };
         saveStore();
@@ -203,7 +206,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
         ]);
         
         await replyPrivate(ctx, uid,
-            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Продать вещь»\n2️⃣ Ответь на 6 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут написать тебе\n\nОтменить создание можно, написав `/отмена`",
+            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Продать вещь»\n2️⃣ Ответь на 6 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут написать тебе\n\nМожно прикрепить до 10 фото!\nОтменить создание можно, написав `/отмена`",
             { format: "markdown", attachments: [backMenu] }
         );
         return;
@@ -234,7 +237,6 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
 bot.hears(/.*/, async (ctx) => {
     const uid = userIdOf(ctx);
     const text = getText(ctx);
-    const photo = getPhoto(ctx);
     
     if (!store.activeForms[uid]) {
         if (!store.knownUsers[uid]) {
@@ -260,21 +262,33 @@ bot.hears(/.*/, async (ctx) => {
     
     const form = store.activeForms[uid];
     
-    // Шаг 5: Фото
-    if (form.step === "photo" && photo) {
-        form.photo = photo;
-        form.step = "confirm";
-        saveStore();
+    // ── Шаг 5: ФОТО (принимаем несколько, накапливаем) ──
+    if (form.step === "photo") {
+        const photos = getPhotos(ctx);
         
-        const confirmMenu = Keyboard.inlineKeyboard([
-            [Keyboard.button.callback("✅ Опубликовать", "publish:yes")],
-            [Keyboard.button.callback("❌ Отменить", "publish:no")]
-        ]);
+        if (photos.length > 0) {
+            form.photos = form.photos || [];
+            form.photos.push(...photos);
+            if (form.photos.length > 10) form.photos = form.photos.slice(0, 10);
+            saveStore();
+            
+            const doneMenu = Keyboard.inlineKeyboard([
+                [Keyboard.button.callback("✅ Готово, публиковать", "photo:done")]
+            ]);
+            
+            await ctx.reply(
+                `✅ Добавлено! Всего фото: **${form.photos.length}**\n\n_Пришли ещё или нажми кнопку:_`,
+                { format: "markdown", attachments: [doneMenu] }
+            );
+            return;
+        }
         
-        await ctx.reply(
-            `✅ Фото получено!\n\n**Предпросмотр:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${form.price} ₽\n📝 **Описание:** ${form.description}\n📍 **Где:** ${form.location}\n📷 **Фото:** есть\n\n**Шаг 6 из 6:** Подтверди публикацию:`,
-            { format: "markdown", attachments: [confirmMenu] }
-        );
+        if (text && typeof text === "string" && !text.startsWith("/")) {
+            await ctx.reply(
+                "⚠️ Я не вижу фото. Пришли фотографию или нажми кнопку «Готово» / «Пропустить фото»",
+                { format: "markdown" }
+            );
+        }
         return;
     }
     
@@ -342,43 +356,41 @@ bot.hears(/.*/, async (ctx) => {
         return;
     }
     
-    // Шаг 4: Местоположение
+    // Шаг 4: Местоположение → переход к фото
     if (form.step === "location") {
         form.location = text.trim();
         form.step = "photo";
+        form.photos = form.photos || [];
         saveStore();
         
-        const skipPhotoMenu = Keyboard.inlineKeyboard([
+        const photoMenu = Keyboard.inlineKeyboard([
+            [Keyboard.button.callback("✅ Готово, публиковать", "photo:done")],
             [Keyboard.button.callback("⏭️ Пропустить фото", "photo:skip")]
         ]);
         
         await ctx.reply(
-            `✅ Место: **${form.location}**\n\n**Шаг 5 из 6:** Прикрепи фото товара\n\n_Отправь фотографию или нажми кнопку, чтобы пропустить_`,
-            { format: "markdown", attachments: [skipPhotoMenu] }
-        );
-        return;
-    }
-    
-    if (form.step === "photo") {
-        await ctx.reply(
-            "⚠️ Я не вижу фото. Отправь фотографию товара или нажми кнопку «Пропустить фото»",
-            { format: "markdown" }
+            `✅ Место: **${form.location}**\n\n**Шаг 5 из 6:** Прикрепи фото товара\n\n_Можно прислать несколько сразу (до 10). Когда закончишь — нажми «✅ Готово»_`,
+            { format: "markdown", attachments: [photoMenu] }
         );
         return;
     }
 });
 
-// ── КНОПКА ПРОПУСКА ФОТО ───────────────────────────────────
+// ── КНОПКИ ФОТО: ГОТОВО / ПРОПУСТИТЬ ───────────────────────
 
 bot.action(/^photo:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
     
-    if (action === "skip" && store.activeForms[uid]) {
-        const form = store.activeForms[uid];
-        form.photo = null;
+    if (!store.activeForms[uid]) return;
+    const form = store.activeForms[uid];
+    
+    if (action === "done" || action === "skip") {
+        if (action === "skip") form.photos = [];
         form.step = "confirm";
         saveStore();
+        
+        const count = (form.photos || []).length;
         
         const confirmMenu = Keyboard.inlineKeyboard([
             [Keyboard.button.callback("✅ Опубликовать", "publish:yes")],
@@ -386,7 +398,7 @@ bot.action(/^photo:(.+)$/, async (ctx) => {
         ]);
         
         await replyPrivate(ctx, uid,
-            `⏭️ Фото пропущено\n\n**Предпросмотр:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${form.price} ₽\n📝 **Описание:** ${form.description}\n📍 **Где:** ${form.location}\n\n**Шаг 6 из 6:** Подтверди публикацию:`,
+            `**Предпросмотр:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${form.price} ₽\n📝 **Описание:** ${form.description}\n📍 **Где:** ${form.location}\n📷 **Фото:** ${count > 0 ? count + " шт." : "нет"}\n\n**Шаг 6 из 6:** Подтверди публикацию:`,
             { format: "markdown", attachments: [confirmMenu] }
         );
     }
@@ -433,7 +445,7 @@ async function finalizeListing(ctx, form, uid) {
         price: form.price,
         description: form.description,
         location: form.location || "не указано",
-        photo: form.photo || null,
+        photos: form.photos || [],
         status: "active",
         createdAt: Date.now(),
     };
@@ -470,11 +482,10 @@ async function finalizeListing(ctx, form, uid) {
     
     // Кнопки для продавца в личку
     const privateButtons = Keyboard.inlineKeyboard([
-        [Keyboard.button.callback("💬 Написать продавцу", `contact:${newItem.id}`)],
         [Keyboard.button.callback("✅ Продано", `sold:${newItem.id}`)]
     ]);
     
-    // Кнопки ДЛЯ КАНАЛА: внизу ненавязчивая "Подать объявление"
+    // Кнопки ДЛЯ КАНАЛА
     const channelButtons = Keyboard.inlineKeyboard([
         [Keyboard.button.callback("💬 Написать продавцу", `contact:${newItem.id}`)],
         [Keyboard.button.callback("✅ Продано", `sold:${newItem.id}`)],
@@ -491,15 +502,12 @@ async function finalizeListing(ctx, form, uid) {
         console.error("❌ Ошибка ответа продавцу:", err);
     }
     
-    // Публикуем в канал
-    const withPhoto = [channelButtons];
-    if (newItem.photo && typeof newItem.photo === "object") {
-        withPhoto.unshift(newItem.photo);
-    }
+    // Публикуем в канал: ВСЕ фото + кнопки
+    const withPhotos = [...newItem.photos, channelButtons];
     
-    await sendToChannel(channelText, withPhoto);
+    await sendToChannel(channelText, withPhotos);
     
-    console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title}`);
+    console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length})`);
 }
 
 // ── КНОПКИ ПОД ОБЪЯВЛЕНИЯМИ ────────────────────────────────
