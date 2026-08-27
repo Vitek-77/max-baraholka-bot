@@ -74,14 +74,26 @@ function getPhoto(ctx) {
     return null;
 }
 
-// ── ОТПРАВКА В КАНАЛ (ТОЧНАЯ сигнатура библиотеки) ─────────
+// Ответ ВСЕГДА в личку пользователю (даже если кнопка нажата в канале)
+async function replyPrivate(ctx, uid, text, opts = {}) {
+    try {
+        await bot.api.sendMessageToUser(uid, text, opts);
+    } catch (e) {
+        try {
+            await ctx.reply(text, opts);
+        } catch (e2) {
+            console.log("⚠️  Не удалось ответить в личку: " + (e2?.message ?? e2));
+        }
+    }
+}
+
+// ── ОТПРАВКА В КАНАЛ ───────────────────────────────────────
 async function sendToChannel(text, libAttachments) {
     if (!CHANNEL_ID) {
         console.log("⚠️  Канал не подключён");
         return false;
     }
 
-    // Попытка 1: с фото и кнопками
     try {
         await bot.api.sendMessageToChat(CHANNEL_ID, text, { attachments: libAttachments });
         console.log("📢 Опубликовано в канале (фото + кнопки)!");
@@ -90,7 +102,6 @@ async function sendToChannel(text, libAttachments) {
         console.log("⚠️  С фото не вышло: " + (e?.message ?? e));
     }
 
-    // Попытка 2: только кнопки (без фото)
     try {
         const buttonsOnly = libAttachments.filter(a => a?.type !== "photo" && a?.type !== "image");
         await bot.api.sendMessageToChat(CHANNEL_ID, text, { attachments: buttonsOnly });
@@ -100,7 +111,6 @@ async function sendToChannel(text, libAttachments) {
         console.log("⚠️  С кнопками не вышло: " + (e?.message ?? e));
     }
 
-    // Попытка 3: только текст
     try {
         await bot.api.sendMessageToChat(CHANNEL_ID, text);
         console.log("📢 Опубликовано в канале (текст)!");
@@ -159,7 +169,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
         };
         saveStore();
         
-        await ctx.reply(
+        await replyPrivate(ctx, uid,
             "📝 **Создание объявления**\n\n**Шаг 1 из 6:** Что продаёте?\n\n_Напиши название товара_",
             { format: "markdown" }
         );
@@ -173,14 +183,14 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
         ]);
         
         if (myItems.length === 0) {
-            return ctx.reply(
+            return replyPrivate(ctx, uid,
                 "У вас пока нет активных объявлений.\n\nНажмите кнопку ниже, чтобы вернуться в меню.",
                 { format: "markdown", attachments: [backMenu] }
             );
         }
         
         const lines = myItems.map(item => `№${item.id} — **${item.title}** за ${item.price} ₽`);
-        await ctx.reply(
+        await replyPrivate(ctx, uid,
             ["📋 **Ваши объявления:**", "", ...lines].join("\n"),
             { format: "markdown", attachments: [backMenu] }
         );
@@ -192,7 +202,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
             [Keyboard.button.callback("🔙 Назад в меню", "menu:back")]
         ]);
         
-        await ctx.reply(
+        await replyPrivate(ctx, uid,
             "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Продать вещь»\n2️⃣ Ответь на 6 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут написать тебе\n\nОтменить создание можно, написав `/отмена`",
             { format: "markdown", attachments: [backMenu] }
         );
@@ -211,7 +221,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
             [Keyboard.button.callback("❓ Помощь", "menu:help")]
         ]);
         
-        await ctx.reply("Главное меню:\n\nЧто хочешь сделать?", { 
+        await replyPrivate(ctx, uid, "Главное меню:\n\nЧто хочешь сделать?", { 
             format: "markdown", 
             attachments: [mainMenu] 
         });
@@ -375,7 +385,7 @@ bot.action(/^photo:(.+)$/, async (ctx) => {
             [Keyboard.button.callback("❌ Отменить", "publish:no")]
         ]);
         
-        await ctx.reply(
+        await replyPrivate(ctx, uid,
             `⏭️ Фото пропущено\n\n**Предпросмотр:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${form.price} ₽\n📝 **Описание:** ${form.description}\n📍 **Где:** ${form.location}\n\n**Шаг 6 из 6:** Подтверди публикацию:`,
             { format: "markdown", attachments: [confirmMenu] }
         );
@@ -400,7 +410,7 @@ bot.action(/^publish:(.+)$/, async (ctx) => {
             [Keyboard.button.callback("❓ Помощь", "menu:help")]
         ]);
         
-        return ctx.reply("❌ Создание объявления отменено.", { 
+        return replyPrivate(ctx, uid, "❌ Создание объявления отменено.", { 
             format: "markdown", 
             attachments: [mainMenu] 
         });
@@ -458,23 +468,31 @@ async function finalizeListing(ctx, form, uid) {
         `🆔 №${newItem.id}`
     ].join("\n");
     
-    const itemButtons = Keyboard.inlineKeyboard([
+    // Кнопки для продавца в личку
+    const privateButtons = Keyboard.inlineKeyboard([
         [Keyboard.button.callback("💬 Написать продавцу", `contact:${newItem.id}`)],
         [Keyboard.button.callback("✅ Продано", `sold:${newItem.id}`)]
+    ]);
+    
+    // Кнопки ДЛЯ КАНАЛА: внизу ненавязчивая "Подать объявление"
+    const channelButtons = Keyboard.inlineKeyboard([
+        [Keyboard.button.callback("💬 Написать продавцу", `contact:${newItem.id}`)],
+        [Keyboard.button.callback("✅ Продано", `sold:${newItem.id}`)],
+        [Keyboard.button.callback("📢 Подать объявление", "menu:sell")]
     ]);
     
     // Отвечаем продавцу в личку
     try {
         await ctx.reply(privateText, { 
             format: "markdown",
-            attachments: [itemButtons]
+            attachments: [privateButtons]
         });
     } catch (err) {
         console.error("❌ Ошибка ответа продавцу:", err);
     }
     
-    // Публикуем в канал (с фото; если фото не пройдёт — сами уберётся)
-    const withPhoto = [itemButtons];
+    // Публикуем в канал
+    const withPhoto = [channelButtons];
     if (newItem.photo && typeof newItem.photo === "object") {
         withPhoto.unshift(newItem.photo);
     }
@@ -488,13 +506,14 @@ async function finalizeListing(ctx, form, uid) {
 
 bot.action(/^contact:(\d+)$/, async (ctx) => {
     const itemId = Number(ctx.match[1]);
+    const uid = userIdOf(ctx);
     const item = store.items.find(i => i.id === itemId);
     
     if (!item || item.status === "sold") {
-        return ctx.reply("Это объявление уже не активно.");
+        return replyPrivate(ctx, uid, "Это объявление уже не активно.");
     }
     
-    await ctx.reply(
+    await replyPrivate(ctx, uid,
         `📞 **Связь с продавцом**\n\nТовар: **${item.title}**\n📍 Где: ${item.location}\nПродавец: ${item.sellerName}\nID продавца: \`${item.sellerId}\`\n\n_Напиши продавцу в личные сообщения в MAX_`,
         { format: "markdown" }
     );
@@ -507,13 +526,13 @@ bot.action(/^sold:(\d+)$/, async (ctx) => {
     
     if (!item) return;
     if (item.sellerId !== uid) {
-        return ctx.reply("Это не ваше объявление!");
+        return replyPrivate(ctx, uid, "Это не ваше объявление!");
     }
     
     item.status = "sold";
     saveStore();
     
-    await ctx.reply(
+    await replyPrivate(ctx, uid,
         `✅ Объявление №${itemId} отмечено как проданное!`,
         { format: "markdown" }
     );
