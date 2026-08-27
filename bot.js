@@ -74,44 +74,39 @@ function getPhoto(ctx) {
     return null;
 }
 
-// ── ОТПРАВКА В КАНАЛ (перебирает варианты аргументов) ──────
+// ── ОТПРАВКА В КАНАЛ (ТОЧНАЯ сигнатура библиотеки) ─────────
 async function sendToChannel(text, libAttachments) {
     if (!CHANNEL_ID) {
         console.log("⚠️  Канал не подключён");
         return false;
     }
 
-    const variants = [
-        ["id, text, кнопки", () => bot.api.sendMessageToChat(CHANNEL_ID, text, libAttachments)],
-        ["id, {text, кнопки}", () => bot.api.sendMessageToChat(CHANNEL_ID, { text, attachments: libAttachments })],
-        ["{chat_id, text, кнопки}", () => bot.api.sendMessageToChat({ chat_id: CHANNEL_ID, text, attachments: libAttachments })],
-        ["id, text (без кнопок)", () => bot.api.sendMessageToChat(CHANNEL_ID, text)],
-    ];
-
-    for (const [name, fn] of variants) {
-        try {
-            await fn();
-            console.log("📢 Опубликовано в канале! (" + name + ")");
-            return true;
-        } catch (e) {
-            console.log("⚠️  Вариант [" + name + "]: " + (e?.message ?? e));
-        }
+    // Попытка 1: с фото и кнопками
+    try {
+        await bot.api.sendMessageToChat(CHANNEL_ID, text, { attachments: libAttachments });
+        console.log("📢 Опубликовано в канале (фото + кнопки)!");
+        return true;
+    } catch (e) {
+        console.log("⚠️  С фото не вышло: " + (e?.message ?? e));
     }
 
-    // Запасной: прямой запрос без кнопок
+    // Попытка 2: только кнопки (без фото)
     try {
-        const res = await fetch("https://platform-api2.max.ru/messages", {
-            method: "POST",
-            headers: { Authorization: TOKEN, "Content-Type": "application/json" },
-            body: JSON.stringify({ chat_id: CHANNEL_ID, text }),
-        });
-        if (res.ok) {
-            console.log("📢 Опубликовано в канале! (REST)");
-            return true;
-        }
-        console.log("⚠️  REST: " + res.status);
+        const buttonsOnly = libAttachments.filter(a => a?.type !== "photo" && a?.type !== "image");
+        await bot.api.sendMessageToChat(CHANNEL_ID, text, { attachments: buttonsOnly });
+        console.log("📢 Опубликовано в канале (кнопки, без фото)!");
+        return true;
     } catch (e) {
-        console.log("⚠️  REST ошибка: " + (e?.message ?? e));
+        console.log("⚠️  С кнопками не вышло: " + (e?.message ?? e));
+    }
+
+    // Попытка 3: только текст
+    try {
+        await bot.api.sendMessageToChat(CHANNEL_ID, text);
+        console.log("📢 Опубликовано в канале (текст)!");
+        return true;
+    } catch (e) {
+        console.log("⚠️  Текст не вышло: " + (e?.message ?? e));
     }
 
     return false;
@@ -478,16 +473,13 @@ async function finalizeListing(ctx, form, uid) {
         console.error("❌ Ошибка ответа продавцу:", err);
     }
     
-    // Публикуем в канал (сначала с фото, если не вышло — без фото)
+    // Публикуем в канал (с фото; если фото не пройдёт — сами уберётся)
     const withPhoto = [itemButtons];
     if (newItem.photo && typeof newItem.photo === "object") {
         withPhoto.unshift(newItem.photo);
     }
     
-    const ok = await sendToChannel(channelText, withPhoto);
-    if (!ok) {
-        await sendToChannel(channelText, [itemButtons]);
-    }
+    await sendToChannel(channelText, withPhoto);
     
     console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title}`);
 }
