@@ -36,8 +36,6 @@ const saveStore = () => {
 
 const bot = new Bot(TOKEN);
 
-console.log("🔧 Доступные методы bot.api: " + Object.keys(bot.api ?? {}).join(", "));
-
 // ── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ────────────────────────────────
 function userIdOf(ctx) {
     return ctx.user?.user_id ?? 
@@ -76,59 +74,46 @@ function getPhoto(ctx) {
     return null;
 }
 
-// ── ОТПРАВКА В КАНАЛ (перебирает все способы) ──────────────
-async function sendToChannel(text, attachments) {
+// ── ОТПРАВКА В КАНАЛ (перебирает варианты аргументов) ──────
+async function sendToChannel(text, libAttachments) {
     if (!CHANNEL_ID) {
-        console.log("⚠️  Канал не подключён: не указан CHANNEL_ID");
+        console.log("⚠️  Канал не подключён");
         return false;
     }
 
-    const payload = { chat_id: CHANNEL_ID, text, attachments };
+    const variants = [
+        ["id, text, кнопки", () => bot.api.sendMessageToChat(CHANNEL_ID, text, libAttachments)],
+        ["id, {text, кнопки}", () => bot.api.sendMessageToChat(CHANNEL_ID, { text, attachments: libAttachments })],
+        ["{chat_id, text, кнопки}", () => bot.api.sendMessageToChat({ chat_id: CHANNEL_ID, text, attachments: libAttachments })],
+        ["id, text (без кнопок)", () => bot.api.sendMessageToChat(CHANNEL_ID, text)],
+    ];
 
-    // Способ 1: методы библиотеки (если они существуют)
-    const methods = [];
-    if (typeof bot.api?.sendMessageToChat === "function") {
-        methods.push(["api.sendMessageToChat", () => bot.api.sendMessageToChat(payload)]);
-    }
-    if (typeof bot.api?.sendMessage === "function") {
-        methods.push(["api.sendMessage", () => bot.api.sendMessage(payload)]);
-    }
-    if (typeof bot.sendMessage === "function") {
-        methods.push(["bot.sendMessage", () => bot.sendMessage(CHANNEL_ID, text, { attachments })]);
-    }
-
-    for (const [name, fn] of methods) {
+    for (const [name, fn] of variants) {
         try {
             await fn();
-            console.log("📢 Объявление опубликовано в канале! (" + name + ")");
+            console.log("📢 Опубликовано в канале! (" + name + ")");
             return true;
         } catch (e) {
-            console.log("⚠️  " + name + " не сработал: " + (e?.message ?? e));
+            console.log("⚠️  Вариант [" + name + "]: " + (e?.message ?? e));
         }
     }
 
-    // Способ 2: напрямую в REST API MAX
-    const bases = ["https://platform-api2.max.ru", "https://botapi.max.ru"];
-    for (const base of bases) {
-        for (const auth of [TOKEN, "Bearer " + TOKEN]) {
-            try {
-                const res = await fetch(base + "/messages", {
-                    method: "POST",
-                    headers: { Authorization: auth, "Content-Type": "application/json" },
-                    body: JSON.stringify(payload),
-                });
-                if (res.ok) {
-                    console.log("📢 Объявление опубликовано в канале! (" + base + ")");
-                    return true;
-                }
-                console.log("⚠️  " + base + " ответил: " + res.status);
-            } catch (e) {
-                console.log("⚠️  " + base + " ошибка: " + (e?.message ?? e));
-            }
+    // Запасной: прямой запрос без кнопок
+    try {
+        const res = await fetch("https://platform-api2.max.ru/messages", {
+            method: "POST",
+            headers: { Authorization: TOKEN, "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: CHANNEL_ID, text }),
+        });
+        if (res.ok) {
+            console.log("📢 Опубликовано в канале! (REST)");
+            return true;
         }
+        console.log("⚠️  REST: " + res.status);
+    } catch (e) {
+        console.log("⚠️  REST ошибка: " + (e?.message ?? e));
     }
 
-    console.log("❌ Не удалось отправить в канал. Методы API: " + Object.keys(bot.api ?? {}).join(", "));
     return false;
 }
 
@@ -494,12 +479,12 @@ async function finalizeListing(ctx, form, uid) {
     }
     
     // Публикуем в канал (сначала с фото, если не вышло — без фото)
-    const channelAttachments = [itemButtons];
+    const withPhoto = [itemButtons];
     if (newItem.photo && typeof newItem.photo === "object") {
-        channelAttachments.unshift(newItem.photo);
+        withPhoto.unshift(newItem.photo);
     }
     
-    const ok = await sendToChannel(channelText, channelAttachments);
+    const ok = await sendToChannel(channelText, withPhoto);
     if (!ok) {
         await sendToChannel(channelText, [itemButtons]);
     }
