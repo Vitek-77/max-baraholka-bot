@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  8 ШАГОВ (кнопка "Готово" без "публиковать")
+//  ФИНАЛЬНАЯ ВЕРСИЯ (с кнопкой "Поделиться")
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 // ── НАСТРОЙКИ ──────────────────────────────────────────────
 const TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = -78241752722859;
+const CHANNEL_LINK = "https://max.ru/-78241752722859";
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
 const STORE_FILE = new URL("./store.json", import.meta.url);
@@ -112,7 +113,8 @@ function buildChannelText(item) {
 
 function buildChannelButtons(item) {
     return Keyboard.inlineKeyboard([
-        [Keyboard.button.callback("📢 Подать объявление", "menu:sell")]
+        [Keyboard.button.callback("📢 Подать объявление", "menu:sell")],
+        [Keyboard.button.callback("📤 Поделиться", `share:${item.id}`)]
     ]);
 }
 
@@ -200,7 +202,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     if (action === "help") {
         const backMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🔙 Назад в меню", "menu:back")]]);
         await replyPrivate(ctx, uid,
-            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
+            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\n📤 Кнопка «Поделиться» — перешли объявление соседу!\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
             { format: "markdown", attachments: [backMenu] });
         return;
     }
@@ -395,7 +397,7 @@ async function finalizeListing(ctx, form, uid) {
         `🏷️ **${newItem.title}**`,
         `📝 **Описание:** ${newItem.description}`,
         `💰 **Цена:** ${fmtPrice(newItem.price)}`,
-        ` **Где:** ${newItem.location}`,
+        `📍 **Где:** ${newItem.location}`,
         `📞 **Телефон:** ${newItem.phone}`,
         `👤 **Продавец:** ${newItem.sellerName}`
     ].join("\n");
@@ -409,6 +411,32 @@ async function finalizeListing(ctx, form, uid) {
     const res = await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
     console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length})`);
 }
+
+// ── КНОПКА "ПОДЕЛИТЬСЯ" ────────────────────────────────────
+bot.action(/^share:(\d+)$/, async (ctx) => {
+    const itemId = Number(ctx.match[1]);
+    const uid = userIdOf(ctx);
+    const item = store.items.find(i => i.id === itemId);
+    
+    if (!item) {
+        return replyPrivate(ctx, uid, "Объявление не найдено.");
+    }
+    
+    const shareText = [
+        "📤 **Поделись объявлением с соседями!**",
+        "",
+        `🏷️ ${item.title}`,
+        `💰 Цена: ${fmtPrice(item.price)}`,
+        `📝 Описание: ${item.description}`,
+        `📍 Где: ${item.location}`,
+        `📞 Звонить: ${item.phone}`,
+        `👤 Продавец: ${item.sellerName}`,
+        "",
+        `🔗 Ссылка на канал: ${CHANNEL_LINK}`
+    ].join("\n");
+    
+    await replyPrivate(ctx, uid, shareText, { format: "markdown" });
+});
 
 // ── ВЕБ-СЕРВЕР ─────────────────────────────────────────────
 const http = await import("node:http");
