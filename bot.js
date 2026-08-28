@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ: исправлен ID поста + редактирование + автоперезапуск
+//  ФИНАЛЬНАЯ: редактирование БЕЗ спама в канале
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -99,7 +99,6 @@ async function replyPrivate(ctx, uid, text, opts = {}) {
     }
 }
 
-// Ищем ID поста — теперь и в body.mid (как у MAX)
 function extractMid(res) {
     if (!res) return null;
     return res.body?.mid ??
@@ -172,7 +171,7 @@ async function sendToChannel(text, libAttachments) {
     return null;
 }
 
-// ── ОБНОВЛЕНИЕ ПОСТА В КАНАЛЕ ──────────────────────────────
+// ── ОБНОВЛЕНИЕ ПОСТА В КАНАЛЕ (ТОЛЬКО edit, без спама) ─────
 async function updateChannelPost(item) {
     if (!item.channelMsgId) {
         console.log("⚠️  Нет ID поста — пост в канале не обновлён (данные изменены в боте)");
@@ -196,31 +195,8 @@ async function updateChannelPost(item) {
         }
     }
 
-    let deleted = false;
-    const delVariants = [
-        ["delete (id, mid)", () => bot.api.deleteMessage(CHANNEL_ID, item.channelMsgId)],
-        ["delete (объектом)", () => bot.api.deleteMessage({ chat_id: CHANNEL_ID, message_id: item.channelMsgId })],
-    ];
-    for (const [name, fn] of delVariants) {
-        try {
-            await fn();
-            deleted = true;
-            console.log("🗑 Старый пост удалён (" + name + ")");
-            break;
-        } catch (e) {
-            console.log("⚠️  " + name + ": " + (e?.message ?? e));
-        }
-    }
-
-    const res = await sendToChannel(text, [...item.photos, buttons]);
-    const mid = extractMid(res);
-    if (mid) {
-        item.channelMsgId = mid;
-        saveStore();
-        console.log("📢 Опубликован обновлённый пост! mid: " + mid + (deleted ? " (старый удалён)" : " (старый остался выше)"));
-    } else {
-        console.log("⚠️  Пост в канале не обновился — свежие данные только в боте");
-    }
+    // MAX не дал отредактировать — НЕ спамим новым постом, данные уже обновлены в боте
+    console.log("ℹ️  MAX не позволил отредактировать пост. Данные обновлены в боте, пост в канале остался прежним.");
 }
 
 // ── КАРТОЧКА С РЕДАКТИРОВАНИЕМ ─────────────────────────────
