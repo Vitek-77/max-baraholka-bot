@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ (рабочая ссылка канала)
+//  ФИНАЛЬНАЯ (чистая ссылка без превью)
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -109,7 +109,6 @@ function buildChannelText(item) {
         `📞 Звонить: ${item.phone}`,
         `👤 Продавец: ${item.sellerName}`,
         "",
-        "👇 Наш канал — жми и делись:",
         CHANNEL_LINK
     ].join("\n");
 }
@@ -149,7 +148,7 @@ async function sendToChannel(text, libAttachments) {
         console.log("📢 Опубликовано в канале (текст)!");
         return res;
     } catch (e) {
-        console.log("️  Текст не вышло: " + (e?.message ?? e));
+        console.log("⚠️  Текст не вышло: " + (e?.message ?? e));
     }
 
     return null;
@@ -403,7 +402,6 @@ async function finalizeListing(ctx, form, uid) {
         `📞 **Телефон:** ${newItem.phone}`,
         `👤 **Продавец:** ${newItem.sellerName}`,
         "",
-        "👇 Наш канал — жми и делись:",
         CHANNEL_LINK
     ].join("\n");
     
