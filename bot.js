@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ: даром + редактирование + автоперезапуск + кнопка ✏️
+//  ФИНАЛЬНАЯ: исправлен ID поста + редактирование + автоперезапуск
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -99,9 +99,11 @@ async function replyPrivate(ctx, uid, text, opts = {}) {
     }
 }
 
+// Ищем ID поста — теперь и в body.mid (как у MAX)
 function extractMid(res) {
     if (!res) return null;
-    return res.message?.mid ??
+    return res.body?.mid ??
+           res.message?.mid ??
            res.message?.message_id ??
            res.message?.id ??
            res.mid ??
@@ -554,7 +556,6 @@ async function finalizeListing(ctx, form, uid) {
         `🆔 №${newItem.id}`
     ].join("\n");
     
-    // Кнопки для продавца: Продано + Редактировать
     const privateButtons = Keyboard.inlineKeyboard([
         [Keyboard.button.callback("✅ Продано", `sold:${newItem.id}`)],
         [Keyboard.button.callback("✏️ Редактировать", `my:${newItem.id}`)]
