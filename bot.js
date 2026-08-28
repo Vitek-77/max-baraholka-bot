@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  МИНИМАЛЬНАЯ СТАБИЛЬНАЯ ВЕРСИЯ (без БД, без лишнего)
+//  8 ШАГОВ (с именем продавца вручную)
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -106,15 +106,12 @@ function buildChannelText(item) {
         `📝 Описание: ${item.description}`,
         `📍 Где: ${item.location}`,
         `📞 Звонить: ${item.phone}`,
-        `👤 Продавец: ${item.sellerName}`,
-        "",
-        `🆔 №${item.id}`
+        `👤 Продавец: ${item.sellerName}`
     ].join("\n");
 }
 
 function buildChannelButtons(item) {
     return Keyboard.inlineKeyboard([
-        [Keyboard.button.callback("💬 Написать продавцу", `contact:${item.id}`)],
         [Keyboard.button.callback("📢 Подать объявление", "menu:sell")]
     ]);
 }
@@ -176,10 +173,10 @@ bot.action(/^price:(.+)$/, async (ctx) => {
     if (action === "free" && store.activeForms[uid]) {
         const form = store.activeForms[uid];
         form.price = 0;
-        form.step = "description";
+        form.step = "location";
         saveStore();
         await replyPrivate(ctx, uid,
-            "✅ Цена: **🎁 Бесплатно / отдам даром**\n\n**Шаг 3 из 7:** Описание товара\n\n_Напиши состояние, комплектацию и другие детали_",
+            "✅ Цена: **🎁 Бесплатно / отдам даром**\n\n**Шаг 4 из 8:** Где ты находишься?\n\n_Напиши деревню или СНТ (например: д. Бояркино или СНТ \"Берёзка\")_",
             { format: "markdown" });
     }
 });
@@ -191,11 +188,11 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     
     if (action === "sell") {
         store.activeForms[uid] = {
-            step: "title", name: userNameOf(ctx), userId: uid, photos: [], createdAt: Date.now()
+            step: "title", userId: uid, photos: [], createdAt: Date.now()
         };
         saveStore();
         await replyPrivate(ctx, uid,
-            "📝 **Создание объявления**\n\n**Шаг 1 из 7:** Что будем выкладывать в объявлении?\n\n_Напиши название (например: велосипед)_",
+            "📝 **Создание объявления**\n\n**Шаг 1 из 8:** Что будем выкладывать в объявлении?\n\n_Напиши название (например: велосипед)_",
             { format: "markdown" });
         return;
     }
@@ -203,7 +200,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     if (action === "help") {
         const backMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🔙 Назад в меню", "menu:back")]]);
         await replyPrivate(ctx, uid,
-            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 7 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
+            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
             { format: "markdown", attachments: [backMenu] });
         return;
     }
@@ -267,32 +264,32 @@ bot.hears(/.*/, async (ctx) => {
     // Шаг 1: Название
     if (form.step === "title") {
         form.title = text.trim();
-        form.step = "price";
+        form.step = "description";
         saveStore();
-        const priceMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🎁 Отдам даром", "price:free")]]);
-        await ctx.reply(`✅ Название: **${form.title}**\n\n**Шаг 2 из 7:** Какая цена?\n\n_Напиши цену в рублях или нажми кнопку:_`, { format: "markdown", attachments: [priceMenu] });
+        await ctx.reply(`✅ Название: **${form.title}**\n\n**Шаг 2 из 8:** Описание товара\n\n_Напиши состояние, комплектацию и другие детали_`, { format: "markdown" });
         return;
     }
     
-    // Шаг 2: Цена
+    // Шаг 2: Описание
+    if (form.step === "description") {
+        form.description = text.trim();
+        form.step = "price";
+        saveStore();
+        const priceMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🎁 Отдам даром", "price:free")]]);
+        await ctx.reply(`✅ Описание сохранено\n\n**Шаг 3 из 8:** Какая цена?\n\n_Напиши цену в рублях или нажми кнопку:_`, { format: "markdown", attachments: [priceMenu] });
+        return;
+    }
+    
+    // Шаг 3: Цена
     if (form.step === "price") {
         const price = parseInt(text.replace(/\D/g, ""));
         if (isNaN(price) || price < 0) {
             return ctx.reply("❌ **Неверная цена!**\n\nНапиши цену числом (например: 5000) или нажми «🎁 Отдам даром»", { format: "markdown" });
         }
         form.price = price;
-        form.step = "description";
-        saveStore();
-        await ctx.reply(`✅ Цена: **${fmtPrice(form.price)}**\n\n**Шаг 3 из 7:** Описание товара\n\n_Напиши состояние, комплектацию и другие детали_`, { format: "markdown" });
-        return;
-    }
-    
-    // Шаг 3: Описание
-    if (form.step === "description") {
-        form.description = text.trim();
         form.step = "location";
         saveStore();
-        await ctx.reply("✅ Описание сохранено\n\n**Шаг 4 из 7:** Где ты находишься?\n\n_Напиши деревню или СНТ (например: д. Бояркино или СНТ \"Берёзка\")_", { format: "markdown" });
+        await ctx.reply(`✅ Цена: **${fmtPrice(form.price)}**\n\n**Шаг 4 из 8:** Где ты находишься?\n\n_Напиши деревню или СНТ (например: д. Бояркино или СНТ \"Берёзка\")_`, { format: "markdown" });
         return;
     }
     
@@ -305,7 +302,7 @@ bot.hears(/.*/, async (ctx) => {
         const photoMenu = Keyboard.inlineKeyboard([
             [Keyboard.button.callback("✅ Готово, публиковать", "photo:done")]
         ]);
-        await ctx.reply(`✅ Место: **${form.location}**\n\n**Шаг 5 из 7:** Прикрепи фото товара\n\n_Можно прислать несколько сразу (до 10). Когда закончишь — нажми «✅ Готово»_`, { format: "markdown", attachments: [photoMenu] });
+        await ctx.reply(`✅ Место: **${form.location}**\n\n**Шаг 5 из 8:** Прикрепи фото товара\n\n_Можно прислать несколько сразу (до 10). Когда закончишь — нажми «✅ Готово»_`, { format: "markdown", attachments: [photoMenu] });
         return;
     }
     
@@ -317,6 +314,15 @@ bot.hears(/.*/, async (ctx) => {
             return ctx.reply("❌ **Неверный телефон!**\n\nНапиши номер с цифрами (например: 8-999-123-45-67)", { format: "markdown" });
         }
         form.phone = phone;
+        form.step = "name";
+        saveStore();
+        await ctx.reply(`✅ Телефон: **${form.phone}**\n\n**Шаг 7 из 8:** Как к вам обращаться?\n\n_Напиши имя для объявления (например: Виктор или Анна Петровна)_`, { format: "markdown" });
+        return;
+    }
+    
+    // Шаг 7: Имя продавца
+    if (form.step === "name") {
+        form.sellerName = text.trim();
         form.step = "confirm";
         saveStore();
         
@@ -326,7 +332,7 @@ bot.hears(/.*/, async (ctx) => {
             [Keyboard.button.callback("❌ Отменить", "publish:no")]
         ]);
         await replyPrivate(ctx, uid,
-            `**Предпросмотр:**\n\n🏷️ **${form.title}**\n💰 **Цена:** ${fmtPrice(form.price)}\n📝 **Описание:** ${form.description}\n📍 **Где:** ${form.location}\n📷 **Фото:** ${count > 0 ? count + " шт." : "нет"}\n📞 **Телефон:** ${form.phone}\n\n**Шаг 7 из 7:** Подтверди публикацию:`,
+            `**Предпросмотр:**\n\n🏷️ **${form.title}**\n📝 **Описание:** ${form.description}\n💰 **Цена:** ${fmtPrice(form.price)}\n📍 **Где:** ${form.location}\n📷 **Фото:** ${count > 0 ? count + " шт." : "нет"}\n📞 **Телефон:** ${form.phone}\n👤 **Продавец:** ${form.sellerName}\n\n**Шаг 8 из 8:** Подтверди публикацию:`,
             { format: "markdown", attachments: [confirmMenu] });
         return;
     }
@@ -343,7 +349,7 @@ bot.action(/^photo:(.+)$/, async (ctx) => {
         form.step = "phone";
         saveStore();
         await replyPrivate(ctx, uid,
-            "✅ Фото сохранены\n\n**Шаг 6 из 7:** Твой номер телефона для связи\n\n_Напиши номер (например: 8-999-123-45-67)_",
+            "✅ Фото сохранены\n\n**Шаг 6 из 8:** Твой номер телефона для связи\n\n_Напиши номер (например: 8-999-123-45-67)_",
             { format: "markdown" });
     }
 });
@@ -368,7 +374,7 @@ async function finalizeListing(ctx, form, uid) {
     const newItem = {
         id: store.nextId++,
         sellerId: form.userId,
-        sellerName: form.name,
+        sellerName: form.sellerName,
         title: form.title,
         price: form.price,
         description: form.description,
@@ -387,13 +393,11 @@ async function finalizeListing(ctx, form, uid) {
         "📦 **НОВОЕ ОБЪЯВЛЕНИЕ**",
         "",
         `🏷️ **${newItem.title}**`,
-        `💰 **Цена:** ${fmtPrice(newItem.price)}`,
         `📝 **Описание:** ${newItem.description}`,
+        `💰 **Цена:** ${fmtPrice(newItem.price)}`,
         `📍 **Где:** ${newItem.location}`,
         `📞 **Телефон:** ${newItem.phone}`,
-        `👤 **Продавец:** ${newItem.sellerName}`,
-        "",
-        `🆔 №${newItem.id}`
+        `👤 **Продавец:** ${newItem.sellerName}`
     ].join("\n");
     
     try {
@@ -405,19 +409,6 @@ async function finalizeListing(ctx, form, uid) {
     const res = await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
     console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length})`);
 }
-
-// ── КНОПКА "НАПИСАТЬ ПРОДАВЦУ" (показывает телефон) ────────
-bot.action(/^contact:(\d+)$/, async (ctx) => {
-    const itemId = Number(ctx.match[1]);
-    const uid = userIdOf(ctx);
-    const item = store.items.find(i => i.id === itemId);
-    if (!item || item.status !== "active") {
-        return replyPrivate(ctx, uid, "Это объявление уже не активно.");
-    }
-    await replyPrivate(ctx, uid,
-        `📞 **Связь с продавцом**\n\nТовар: **${item.title}**\n📍 Где: ${item.location}\n📞 **Звонить: ${item.phone}**\n👤 Продавец: ${item.sellerName}`,
-        { format: "markdown" });
-});
 
 // ── ВЕБ-СЕРВЕР ─────────────────────────────────────────────
 const http = await import("node:http");
