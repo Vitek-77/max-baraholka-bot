@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ: даром + редактирование + обновление поста в канале
+//  ФИНАЛЬНАЯ: даром + редактирование + автоперезапуск
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -99,7 +99,6 @@ async function replyPrivate(ctx, uid, text, opts = {}) {
     }
 }
 
-// Ищем ID сообщения в ответе MAX (перебираем все варианты)
 function extractMid(res) {
     if (!res) return null;
     return res.message?.mid ??
@@ -180,7 +179,6 @@ async function updateChannelPost(item) {
     const text = buildChannelText(item);
     const buttons = buildChannelButtons(item);
 
-    // Попытка 1: отредактировать пост
     const editVariants = [
         ["edit (id, mid, фото+кнопки)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [...item.photos, buttons] })],
         ["edit (id, mid, кнопки)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [buttons] })],
@@ -196,7 +194,6 @@ async function updateChannelPost(item) {
         }
     }
 
-    // Попытка 2: удалить старый пост и опубликовать новый
     let deleted = false;
     const delVariants = [
         ["delete (id, mid)", () => bot.api.deleteMessage(CHANNEL_ID, item.channelMsgId)],
@@ -615,9 +612,14 @@ http.createServer((req, res) => {
   console.log("🌐 Веб-сервер запущен на порту " + port);
 });
 
-// ── ЗАПУСК ─────────────────────────────────────────────────
+// ── ЗАПУСК И АВТОПЕРЕЗАПУСК ────────────────────────────────
 process.on("unhandledRejection", (err) => {
-    console.error("⚠️ Ошибка:", err);
+    const msg = String(err?.message ?? err) + " " + String(err?.cause?.message ?? "") + " " + String(err?.cause?.code ?? "");
+    console.error("⚠️ Ошибка: " + msg);
+    if (/ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|fetch failed|socket/i.test(msg)) {
+        console.log("🔄 Сетевой сбой — перезапускаю бота (Render поднимет заново)…");
+        process.exit(1);
+    }
 });
 
 console.log("🚀 Барахолка «У соседа» (Бояркино) запускается…");
