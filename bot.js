@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  8 ШАГОВ (с именем продавца вручную)
+//  8 ШАГОВ (кнопка "Готово" без "публиковать")
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -241,7 +241,7 @@ bot.hears(/.*/, async (ctx) => {
             form.photos.push(...photos);
             if (form.photos.length > 10) form.photos = form.photos.slice(0, 10);
             saveStore();
-            const doneMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("✅ Готово, публиковать", "photo:done")]]);
+            const doneMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("✅ Готово", "photo:done")]]);
             await ctx.reply(`✅ Добавлено! Всего фото: **${form.photos.length}**\n\n_Пришли ещё или нажми кнопку:_`, { format: "markdown", attachments: [doneMenu] });
             return;
         }
@@ -300,7 +300,7 @@ bot.hears(/.*/, async (ctx) => {
         form.photos = form.photos || [];
         saveStore();
         const photoMenu = Keyboard.inlineKeyboard([
-            [Keyboard.button.callback("✅ Готово, публиковать", "photo:done")]
+            [Keyboard.button.callback("✅ Готово", "photo:done")]
         ]);
         await ctx.reply(`✅ Место: **${form.location}**\n\n**Шаг 5 из 8:** Прикрепи фото товара\n\n_Можно прислать несколько сразу (до 10). Когда закончишь — нажми «✅ Готово»_`, { format: "markdown", attachments: [photoMenu] });
         return;
@@ -395,7 +395,7 @@ async function finalizeListing(ctx, form, uid) {
         `🏷️ **${newItem.title}**`,
         `📝 **Описание:** ${newItem.description}`,
         `💰 **Цена:** ${fmtPrice(newItem.price)}`,
-        `📍 **Где:** ${newItem.location}`,
+        ` **Где:** ${newItem.location}`,
         `📞 **Телефон:** ${newItem.phone}`,
         `👤 **Продавец:** ${newItem.sellerName}`
     ].join("\n");
