@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ (ссылка без превью-карточки)
+//  ФИНАЛЬНАЯ (рабочая ссылка канала)
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -9,7 +9,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 // ── НАСТРОЙКИ ──────────────────────────────────────────────
 const TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = -78241752722859;
-const CHANNEL_LINK = "https://max.ru/-78241752722859";
+const CHANNEL_LINK = "https://max.ru/channel_usoseda";
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
 const STORE_FILE = new URL("./store.json", import.meta.url);
@@ -149,7 +149,7 @@ async function sendToChannel(text, libAttachments) {
         console.log("📢 Опубликовано в канале (текст)!");
         return res;
     } catch (e) {
-        console.log("⚠️  Текст не вышло: " + (e?.message ?? e));
+        console.log("️  Текст не вышло: " + (e?.message ?? e));
     }
 
     return null;
