@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ: редактирование БЕЗ спама в канале
+//  ФИНАЛЬНАЯ: без редактирования поста + кнопка удалить + подсказка старт
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -9,6 +9,7 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 // ── НАСТРОЙКИ ──────────────────────────────────────────────
 const TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = -78241752722859;
+const BOT_USERNAME = "baraholka_boyarkino_bot"; // ← ЗАМЕНИ на имя своего бота!
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
 const STORE_FILE = new URL("./store.json", import.meta.url);
@@ -171,35 +172,7 @@ async function sendToChannel(text, libAttachments) {
     return null;
 }
 
-// ── ОБНОВЛЕНИЕ ПОСТА В КАНАЛЕ (ТОЛЬКО edit, без спама) ─────
-async function updateChannelPost(item) {
-    if (!item.channelMsgId) {
-        console.log("⚠️  Нет ID поста — пост в канале не обновлён (данные изменены в боте)");
-        return;
-    }
-    const text = buildChannelText(item);
-    const buttons = buildChannelButtons(item);
-
-    const editVariants = [
-        ["edit (id, mid, фото+кнопки)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [...item.photos, buttons] })],
-        ["edit (id, mid, кнопки)", () => bot.api.editMessage(CHANNEL_ID, item.channelMsgId, { text, attachments: [buttons] })],
-        ["edit (объектом)", () => bot.api.editMessage({ chat_id: CHANNEL_ID, message_id: item.channelMsgId, text, attachments: [buttons] })],
-    ];
-    for (const [name, fn] of editVariants) {
-        try {
-            await fn();
-            console.log("✏️ Пост в канале обновлён! (" + name + ")");
-            return;
-        } catch (e) {
-            console.log("⚠️  " + name + ": " + (e?.message ?? e));
-        }
-    }
-
-    // MAX не дал отредактировать — НЕ спамим новым постом, данные уже обновлены в боте
-    console.log("ℹ️  MAX не позволил отредактировать пост. Данные обновлены в боте, пост в канале остался прежним.");
-}
-
-// ── КАРТОЧКА С РЕДАКТИРОВАНИЕМ ─────────────────────────────
+// ── КАРТОЧКА С РЕДАКТИРОВАНИЕМ И УДАЛЕНИЕМ ─────────────────
 function editKeyboard(id) {
     return Keyboard.inlineKeyboard([
         [Keyboard.button.callback("💰 Изменить цену", `edit:price:${id}`)],
@@ -207,6 +180,7 @@ function editKeyboard(id) {
         [Keyboard.button.callback("🏷️ Изменить название", `edit:title:${id}`)],
         [Keyboard.button.callback("📍 Изменить место", `edit:location:${id}`)],
         [Keyboard.button.callback("✅ Продано", `sold:${id}`)],
+        [Keyboard.button.callback("🗑 Удалить объявление", `delete:${id}`)],
         [Keyboard.button.callback("🔙 Назад", "menu:my_items")]
     ]);
 }
@@ -237,7 +211,7 @@ async function showMyItems(ctx, uid) {
 
 // ── ПРИВЕТСТВИЕ ────────────────────────────────────────────
 async function sendWelcome(ctx, name) {
-    const welcomeText = `Привет, ${name}! 👋\n\nЯ бот барахолки «У соседа» — Бояркино и окрестности.\nЗдесь соседи продают, покупают и меняются вещами.\n\nЧто хочешь сделать?`;
+    const welcomeText = `Привет, ${name}! 👋\n\nЯ бот барахолки «У соседа» — Бояркино и окрестности.\nЗдесь соседи продают, покупают и меняются вещами.\n\n💡 **Напиши любое слово**, чтобы я проснулся!\n\nЧто хочешь сделать?`;
     await ctx.reply(welcomeText, { format: "markdown", attachments: [mainMenuKeyboard()] });
 }
 
@@ -290,9 +264,10 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     }
     
     if (action === "help") {
+        const startLink = `https://max.ru/${BOT_USERNAME}`;
         const backMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🔙 Назад в меню", "menu:back")]]);
         await replyPrivate(ctx, uid,
-            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 6 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут написать тебе\n\n✏️ Сразу после публикации можно **отредактировать** объявление\n📋 Или через «Мои объявления»\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
+            `❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 6 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут написать тебе\n\n✏️ В «Мои объявления» можно **изменить** или **удалить** объявление\n\n🔗 **Ссылка на бота:** ${startLink}\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши \`/отмена\``,
             { format: "markdown", attachments: [backMenu] });
         return;
     }
@@ -318,7 +293,7 @@ bot.action(/^my:(\d+)$/, async (ctx) => {
     await replyPrivate(ctx, uid, itemCardText(item), { format: "markdown", attachments: [editKeyboard(id)] });
 });
 
-// ── РЕЖИМ РЕДАКТИРОВАНИЯ ───────────────────────────────────
+// ── РЕЖИМ РЕДАКТИРОВАНИЯ (только в боте, пост в канале не трогается) ──
 bot.action(/^edit:(\w+):(\d+)$/, async (ctx) => {
     const field = ctx.match[1];
     const id = Number(ctx.match[2]);
@@ -339,6 +314,19 @@ bot.action(/^edit:(\w+):(\d+)$/, async (ctx) => {
     await replyPrivate(ctx, uid, prompts[field] || "Напиши новое значение:", { format: "markdown" });
 });
 
+// ── УДАЛЕНИЕ ОБЪЯВЛЕНИЯ ────────────────────────────────────
+bot.action(/^delete:(\d+)$/, async (ctx) => {
+    const id = Number(ctx.match[1]);
+    const uid = userIdOf(ctx);
+    const item = store.items.find(i => i.id === id);
+    if (!item || item.sellerId !== uid) return replyPrivate(ctx, uid, "Объявление не найдено.");
+    
+    item.status = "deleted";
+    saveStore();
+    
+    await replyPrivate(ctx, uid, `🗑 Объявление №${id} удалено из бота.\n\n⚠️ Пост в канале останется (его нужно удалить вручную через MAX).`, { format: "markdown" });
+});
+
 // ── ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ───────────────────────────────
 
 bot.hears(/.*/, async (ctx) => {
@@ -347,7 +335,7 @@ bot.hears(/.*/, async (ctx) => {
     
     if (!store.activeForms[uid]) {
         
-        // ── РЕЖИМ РЕДАКТИРОВАНИЯ ──
+        // ── РЕЖИМ РЕДАКТИРОВАНИЯ (только в боте) ──
         if (store.editMode[uid] && text && typeof text === "string" && !text.startsWith("/")) {
             const em = store.editMode[uid];
             const item = store.items.find(i => i.id === em.id);
@@ -371,8 +359,7 @@ bot.hears(/.*/, async (ctx) => {
             }
             saveStore();
             
-            await ctx.reply("✅ **Объявление обновлено!**", { format: "markdown", attachments: [editKeyboard(item.id)] });
-            await updateChannelPost(item);
+            await ctx.reply("✅ **Объявление обновлено в боте!**\n\n⚠️ Пост в канале остался прежним (MAX не даёт редактировать).", { format: "markdown", attachments: [editKeyboard(item.id)] });
             return;
         }
         
@@ -560,7 +547,7 @@ bot.action(/^contact:(\d+)$/, async (ctx) => {
     const itemId = Number(ctx.match[1]);
     const uid = userIdOf(ctx);
     const item = store.items.find(i => i.id === itemId);
-    if (!item || item.status === "sold") {
+    if (!item || item.status === "sold" || item.status === "deleted") {
         return replyPrivate(ctx, uid, "Это объявление уже не активно.");
     }
     await replyPrivate(ctx, uid,
