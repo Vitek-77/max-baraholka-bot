@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ ВЕРСИЯ (с кнопкой "Поделиться")
+//  ФИНАЛЬНАЯ (без кнопки Поделиться, с призывом + ссылкой в посте)
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -100,21 +100,22 @@ async function replyPrivate(ctx, uid, text, opts = {}) {
 // ── ТЕКСТ И КНОПКИ ПОСТА ДЛЯ КАНАЛА ────────────────────────
 function buildChannelText(item) {
     return [
-        "📦 НОВОЕ ОБЪЯВЛЕНИЕ",
+        "📤 Поделись объявлением с соседями!",
         "",
         `🏷️ ${item.title}`,
         `💰 Цена: ${fmtPrice(item.price)}`,
         `📝 Описание: ${item.description}`,
         `📍 Где: ${item.location}`,
         `📞 Звонить: ${item.phone}`,
-        `👤 Продавец: ${item.sellerName}`
+        `👤 Продавец: ${item.sellerName}`,
+        "",
+        `🔗 ${CHANNEL_LINK}`
     ].join("\n");
 }
 
 function buildChannelButtons(item) {
     return Keyboard.inlineKeyboard([
-        [Keyboard.button.callback("📢 Подать объявление", "menu:sell")],
-        [Keyboard.button.callback("📤 Поделиться", `share:${item.id}`)]
+        [Keyboard.button.callback("📢 Подать объявление", "menu:sell")]
     ]);
 }
 
@@ -202,7 +203,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     if (action === "help") {
         const backMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🔙 Назад в меню", "menu:back")]]);
         await replyPrivate(ctx, uid,
-            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\n📤 Кнопка «Поделиться» — перешли объявление соседу!\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
+            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\n📤 Чтобы поделиться — нажми стрелочку пересылки у поста!\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
             { format: "markdown", attachments: [backMenu] });
         return;
     }
@@ -392,14 +393,16 @@ async function finalizeListing(ctx, form, uid) {
     saveStore();
     
     const privateText = [
-        "📦 **НОВОЕ ОБЪЯВЛЕНИЕ**",
+        "📤 **Поделись объявлением с соседями!**",
         "",
         `🏷️ **${newItem.title}**`,
         `📝 **Описание:** ${newItem.description}`,
         `💰 **Цена:** ${fmtPrice(newItem.price)}`,
         `📍 **Где:** ${newItem.location}`,
         `📞 **Телефон:** ${newItem.phone}`,
-        `👤 **Продавец:** ${newItem.sellerName}`
+        `👤 **Продавец:** ${newItem.sellerName}`,
+        "",
+        `🔗 ${CHANNEL_LINK}`
     ].join("\n");
     
     try {
@@ -411,32 +414,6 @@ async function finalizeListing(ctx, form, uid) {
     const res = await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
     console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length})`);
 }
-
-// ── КНОПКА "ПОДЕЛИТЬСЯ" ────────────────────────────────────
-bot.action(/^share:(\d+)$/, async (ctx) => {
-    const itemId = Number(ctx.match[1]);
-    const uid = userIdOf(ctx);
-    const item = store.items.find(i => i.id === itemId);
-    
-    if (!item) {
-        return replyPrivate(ctx, uid, "Объявление не найдено.");
-    }
-    
-    const shareText = [
-        "📤 **Поделись объявлением с соседями!**",
-        "",
-        `🏷️ ${item.title}`,
-        `💰 Цена: ${fmtPrice(item.price)}`,
-        `📝 Описание: ${item.description}`,
-        `📍 Где: ${item.location}`,
-        `📞 Звонить: ${item.phone}`,
-        `👤 Продавец: ${item.sellerName}`,
-        "",
-        `🔗 Ссылка на канал: ${CHANNEL_LINK}`
-    ].join("\n");
-    
-    await replyPrivate(ctx, uid, shareText, { format: "markdown" });
-});
 
 // ── ВЕБ-СЕРВЕР ─────────────────────────────────────────────
 const http = await import("node:http");
