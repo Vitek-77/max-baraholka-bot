@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ (Защита от канала и сбоев JSON)
+//  ФИНАЛЬНАЯ v2 (кнопки в канале работают, спама нет)
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -85,7 +85,7 @@ function mainMenuKeyboard() {
     ]);
 }
 
-// 🛡️ НОВАЯ ФУНКЦИЯ: Игнорирование канала (чтобы бот не отвечал сам себе)
+// 🛡️ Проверка "это канал?" — нужна, чтобы бот не отвечал на СВОИ посты
 function isFromChannel(ctx) {
     const chatType = ctx.chat?.type || ctx.message?.chat?.type || ctx.message?.recipient?.chat_type || ctx.callback?.message?.chat?.type;
     const chatId = ctx.chat?.chat_id || ctx.message?.chat?.chat_id || ctx.message?.recipient?.chat_id || ctx.callback?.message?.chat?.chat_id || ctx.chat?.id || ctx.message?.chat?.id;
@@ -96,12 +96,13 @@ function isFromChannel(ctx) {
     return false;
 }
 
+// Ответ в личку. ВАЖНО: сначала шлём в личку, и только если не вышло —
+// отвечаем в чат, но НИКОГДА не спамим в канал.
 async function replyPrivate(ctx, uid, text, opts = {}) {
-    // На всякий случай блокируем ответ, если контекст всё же из канала
-    if (isFromChannel(ctx)) return; 
     try {
         await bot.api.sendMessageToUser(uid, text, opts);
     } catch (e) {
+        if (isFromChannel(ctx)) return; // 🛡️ в канал не пишем никогда
         try {
             await ctx.reply(text, opts);
         } catch (e2) {
@@ -174,7 +175,7 @@ async function sendWelcome(ctx, name) {
 }
 
 bot.command("start", async (ctx) => {
-    if (isFromChannel(ctx)) return; // 🛡️ Игнорируем канал
+    if (isFromChannel(ctx)) return; // 🛡️ игнорируем канал
     const uid = userIdOf(ctx);
     if (store.activeForms[uid]) { delete store.activeForms[uid]; saveStore(); }
     store.knownUsers[uid] = true;
@@ -183,8 +184,8 @@ bot.command("start", async (ctx) => {
 });
 
 // ── КНОПКА: ОТДАМ ДАРОМ ────────────────────────────────────
+// ✅ БЕЗ isFromChannel: кнопки нажимают живые люди!
 bot.action(/^price:(.+)$/, async (ctx) => {
-    if (isFromChannel(ctx)) return; // 🛡️ Игнорируем канал
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
     
@@ -200,10 +201,11 @@ bot.action(/^price:(.+)$/, async (ctx) => {
 });
 
 // ── МЕНЮ ───────────────────────────────────────────────────
+// ✅ БЕЗ isFromChannel: кнопки нажимают живые люди!
 bot.action(/^menu:(.+)$/, async (ctx) => {
-    if (isFromChannel(ctx)) return; // 🛡️ Игнорируем канал
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
+    console.log("🔘 Нажата кнопка: " + action + " от юзера " + uid);
     
     if (action === "sell") {
         store.activeForms[uid] = {
@@ -235,7 +237,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
 // ── ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ───────────────────────────────
 
 bot.hears(/.*/, async (ctx) => {
-    if (isFromChannel(ctx)) return; // 🛡️ ГЛАВНЫЙ ФИКС: Игнорируем посты из канала
+    if (isFromChannel(ctx)) return; // 🛡️ ГЛАВНАЯ ЗАЩИТА: свои посты в канале бот не читает
     
     const uid = userIdOf(ctx);
     const text = getText(ctx);
@@ -360,8 +362,8 @@ bot.hears(/.*/, async (ctx) => {
 });
 
 // ── КНОПКИ ФОТО ────────────────────────────────────────────
+// ✅ БЕЗ isFromChannel
 bot.action(/^photo:(.+)$/, async (ctx) => {
-    if (isFromChannel(ctx)) return; // 🛡️ Игнорируем канал
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
     if (!store.activeForms[uid]) return;
@@ -377,8 +379,8 @@ bot.action(/^photo:(.+)$/, async (ctx) => {
 });
 
 // ── ПУБЛИКАЦИЯ / ОТМЕНА ────────────────────────────────────
+// ✅ БЕЗ isFromChannel
 bot.action(/^publish:(.+)$/, async (ctx) => {
-    if (isFromChannel(ctx)) return; // 🛡️ Игнорируем канал
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
     
@@ -449,8 +451,6 @@ http.createServer((req, res) => {
 process.on("unhandledRejection", (err) => {
     const msg = String(err?.message ?? err) + " " + String(err?.cause?.message ?? "") + " " + String(err?.cause?.code ?? "");
     console.error("⚠️ Ошибка: " + msg);
-    
-    // 🛡️ ФИКС JSON: Добавили "not valid JSON" и "Unexpected token"
     if (/ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|fetch failed|socket|not valid JSON|Unexpected token/i.test(msg)) {
         console.log("🔄 Сетевой или JSON сбой — перезапускаю бота (Render поднимет заново)…");
         process.exit(1);
