@@ -1,6 +1,6 @@
 // ============================================================
 //  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-//  ФИНАЛЬНАЯ v2 (кнопки в канале работают, спама нет)
+//  ФИНАЛЬНАЯ v3 (кнопка "Перейти в бота" + новая помощь)
 // ============================================================
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
@@ -8,8 +8,9 @@ import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
 // ── НАСТРОЙКИ ──────────────────────────────────────────────
 const TOKEN = process.env.BOT_TOKEN;
-const CHANNEL_ID = -78241752722859;
-const CHANNEL_LINK = "https://max.ru/channel_usoseda";
+const CHANNEL_ID = process.env.CHANNEL_ID ? Number(process.env.CHANNEL_ID) : -78241752722859;
+const CHANNEL_LINK = process.env.CHANNEL_LINK || "https://max.ru/channel_usoseda";
+const BOT_LINK = process.env.BOT_LINK || "https://max.ru/BaraholkaBot";
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
 const STORE_FILE = new URL("./store.json", import.meta.url);
@@ -85,7 +86,7 @@ function mainMenuKeyboard() {
     ]);
 }
 
-// 🛡️ Проверка "это канал?" — нужна, чтобы бот не отвечал на СВОИ посты
+// 🛡️ Проверка "это канал?" — чтобы бот не отвечал на СВОИ посты
 function isFromChannel(ctx) {
     const chatType = ctx.chat?.type || ctx.message?.chat?.type || ctx.message?.recipient?.chat_type || ctx.callback?.message?.chat?.type;
     const chatId = ctx.chat?.chat_id || ctx.message?.chat?.chat_id || ctx.message?.recipient?.chat_id || ctx.callback?.message?.chat?.chat_id || ctx.chat?.id || ctx.message?.chat?.id;
@@ -96,8 +97,6 @@ function isFromChannel(ctx) {
     return false;
 }
 
-// Ответ в личку. ВАЖНО: сначала шлём в личку, и только если не вышло —
-// отвечаем в чат, но НИКОГДА не спамим в канал.
 async function replyPrivate(ctx, uid, text, opts = {}) {
     try {
         await bot.api.sendMessageToUser(uid, text, opts);
@@ -127,9 +126,20 @@ function buildChannelText(item) {
     ].join("\n");
 }
 
+// 🤖 Кнопка-ссылка "Перейти в бота" (работает на любых телефонах)
+function botLinkButton() {
+    try {
+        if (typeof Keyboard.button.link === "function") {
+            return Keyboard.button.link("🤖 Перейти в бота", BOT_LINK);
+        }
+    } catch (e) {}
+    return { type: "link", text: "🤖 Перейти в бота", url: BOT_LINK };
+}
+
 function buildChannelButtons(item) {
     return Keyboard.inlineKeyboard([
-        [Keyboard.button.callback("📢 Подать объявление", "menu:sell")]
+        [Keyboard.button.callback("📢 Подать объявление", "menu:sell")],
+        [botLinkButton()]
     ]);
 }
 
@@ -184,7 +194,6 @@ bot.command("start", async (ctx) => {
 });
 
 // ── КНОПКА: ОТДАМ ДАРОМ ────────────────────────────────────
-// ✅ БЕЗ isFromChannel: кнопки нажимают живые люди!
 bot.action(/^price:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
@@ -201,7 +210,6 @@ bot.action(/^price:(.+)$/, async (ctx) => {
 });
 
 // ── МЕНЮ ───────────────────────────────────────────────────
-// ✅ БЕЗ isFromChannel: кнопки нажимают живые люди!
 bot.action(/^menu:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
@@ -221,7 +229,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     if (action === "help") {
         const backMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🔙 Назад в меню", "menu:back")]]);
         await replyPrivate(ctx, uid,
-            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\n📤 Чтобы поделиться — нажми стрелочку пересылки у поста!\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
+            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\n📤 Чтобы поделиться — нажми стрелочку пересылки у поста!\n\n🤖 **Если кнопки не нажимаются:**\nнажми под постом «Перейти в бота» и отправь боту любой символ — он ответит!\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
             { format: "markdown", attachments: [backMenu] });
         return;
     }
@@ -362,7 +370,6 @@ bot.hears(/.*/, async (ctx) => {
 });
 
 // ── КНОПКИ ФОТО ────────────────────────────────────────────
-// ✅ БЕЗ isFromChannel
 bot.action(/^photo:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
@@ -379,7 +386,6 @@ bot.action(/^photo:(.+)$/, async (ctx) => {
 });
 
 // ── ПУБЛИКАЦИЯ / ОТМЕНА ────────────────────────────────────
-// ✅ БЕЗ isFromChannel
 bot.action(/^publish:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
