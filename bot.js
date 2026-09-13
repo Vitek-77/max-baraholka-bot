@@ -1,7 +1,8 @@
 // ============================================================
-// 🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
-// v4: исправлен синтаксис + ВНУТРЕННИЙ БУДИЛЬНИК (дайджест 19:00 МСК)
+//  🛒 БАРАХОЛКА "У СОСЕДА" — Бояркино и окрестности
+//  v5: будильник (авто-пост 19:00 МСК) ПОЛНОСТЬЮ ОТКЛЮЧЁН
 // ============================================================
+
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
 
@@ -10,12 +11,11 @@ const TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID ? Number(process.env.CHANNEL_ID) : -78241752722859;
 const CHANNEL_LINK = process.env.CHANNEL_LINK || "https://max.ru/channel_usoseda";
 const BOT_LINK = process.env.BOT_LINK || "https://max.ru/BaraholkaBot";
-const DIGEST_TIME = process.env.DIGEST_TIME || "19:00";
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
 const STORE_FILE = new URL("./store.json", import.meta.url);
-let store = {
-    nextId: 1,
+let store = { 
+    nextId: 1, 
     items: [],
     activeForms: {},
     knownUsers: {}
@@ -38,17 +38,17 @@ const bot = new Bot(TOKEN);
 
 // ── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ────────────────────────────────
 function userIdOf(ctx) {
-    return ctx.user?.user_id ??
-           ctx.callback?.user?.user_id ??
-           ctx.message?.sender?.user_id ??
-           ctx.from?.user_id ??
+    return ctx.user?.user_id ?? 
+           ctx.callback?.user?.user_id ?? 
+           ctx.message?.sender?.user_id ?? 
+           ctx.from?.user_id ?? 
            null;
 }
 
 function userNameOf(ctx) {
-    return ctx.user?.name ??
-           ctx.callback?.user?.name ??
-           ctx.message?.sender?.name ??
+    return ctx.user?.name ?? 
+           ctx.callback?.user?.name ?? 
+           ctx.message?.sender?.name ?? 
            "друг";
 }
 
@@ -90,8 +90,10 @@ function mainMenuKeyboard() {
 function isFromChannel(ctx) {
     const chatType = ctx.chat?.type || ctx.message?.chat?.type || ctx.message?.recipient?.chat_type || ctx.callback?.message?.chat?.type;
     const chatId = ctx.chat?.chat_id || ctx.message?.chat?.chat_id || ctx.message?.recipient?.chat_id || ctx.callback?.message?.chat?.chat_id || ctx.chat?.id || ctx.message?.chat?.id;
+    
     if (chatType === "channel") return true;
     if (chatId && String(chatId) === String(CHANNEL_ID)) return true;
+    
     return false;
 }
 
@@ -99,7 +101,7 @@ async function replyPrivate(ctx, uid, text, opts = {}) {
     try {
         await bot.api.sendMessageToUser(uid, text, opts);
     } catch (e) {
-        if (isFromChannel(ctx)) return;
+        if (isFromChannel(ctx)) return; // 🛡️ в канал не пишем никогда
         try {
             await ctx.reply(text, opts);
         } catch (e2) {
@@ -124,6 +126,7 @@ function buildChannelText(item) {
     ].join("\n");
 }
 
+// 🤖 Кнопка-ссылка "Перейти в бота" (работает на любых телефонах)
 function botLinkButton() {
     try {
         if (typeof Keyboard.button.link === "function") {
@@ -146,6 +149,7 @@ async function sendToChannel(text, libAttachments) {
         console.log("⚠️  Канал не подключён");
         return null;
     }
+
     try {
         const res = await bot.api.sendMessageToChat(CHANNEL_ID, text, { attachments: libAttachments });
         console.log("📢 Опубликовано в канале (фото + кнопки)!");
@@ -153,14 +157,16 @@ async function sendToChannel(text, libAttachments) {
     } catch (e) {
         console.log("⚠️  С фото не вышло: " + (e?.message ?? e));
     }
+
     try {
-        const buttonsOnly = (libAttachments || []).filter(a => a?.type !== "photo" && a?.type !== "image");
+        const buttonsOnly = libAttachments.filter(a => a?.type !== "photo" && a?.type !== "image");
         const res = await bot.api.sendMessageToChat(CHANNEL_ID, text, { attachments: buttonsOnly });
         console.log("📢 Опубликовано в канале (кнопки, без фото)!");
         return res;
     } catch (e) {
         console.log("⚠️  С кнопками не вышло: " + (e?.message ?? e));
     }
+
     try {
         const res = await bot.api.sendMessageToChat(CHANNEL_ID, text);
         console.log("📢 Опубликовано в канале (текст)!");
@@ -168,6 +174,7 @@ async function sendToChannel(text, libAttachments) {
     } catch (e) {
         console.log("⚠️  Текст не вышло: " + (e?.message ?? e));
     }
+
     return null;
 }
 
@@ -178,7 +185,7 @@ async function sendWelcome(ctx, name) {
 }
 
 bot.command("start", async (ctx) => {
-    if (isFromChannel(ctx)) return;
+    if (isFromChannel(ctx)) return; // 🛡️ игнорируем канал
     const uid = userIdOf(ctx);
     if (store.activeForms[uid]) { delete store.activeForms[uid]; saveStore(); }
     store.knownUsers[uid] = true;
@@ -190,6 +197,7 @@ bot.command("start", async (ctx) => {
 bot.action(/^price:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
+    
     if (action === "free" && store.activeForms[uid]) {
         const form = store.activeForms[uid];
         form.price = 0;
@@ -206,7 +214,7 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
     console.log("🔘 Нажата кнопка: " + action + " от юзера " + uid);
-
+    
     if (action === "sell") {
         store.activeForms[uid] = {
             step: "title", userId: uid, photos: [], createdAt: Date.now()
@@ -217,15 +225,15 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
             { format: "markdown" });
         return;
     }
-
+    
     if (action === "help") {
         const backMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🔙 Назад в меню", "menu:back")]]);
         await replyPrivate(ctx, uid,
-            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\n📤 Чтобы поделиться — нажми стрелочку пересылки у поста!\n\n🤖 **Если кнопки не нажимаются:** нажми под постом «Перейти в бота» и отправь боту любой символ — он ответит!\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
+            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\n📤 Чтобы поделиться — нажми стрелочку пересылки у поста!\n\n🤖 **Если кнопки не нажимаются:**\nнажми под постом «Перейти в бота» и отправь боту любой символ — он ответит!\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
             { format: "markdown", attachments: [backMenu] });
         return;
     }
-
+    
     if (action === "back") {
         if (store.activeForms[uid]) { delete store.activeForms[uid]; }
         saveStore();
@@ -235,12 +243,13 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
 });
 
 // ── ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ───────────────────────────────
-bot.hears(/.*/, async (ctx) => {
-    if (isFromChannel(ctx)) return;
 
+bot.hears(/.*/, async (ctx) => {
+    if (isFromChannel(ctx)) return; // 🛡️ ГЛАВНАЯ ЗАЩИТА: свои посты в канале бот не читает
+    
     const uid = userIdOf(ctx);
     const text = getText(ctx);
-
+    
     if (!store.activeForms[uid]) {
         if (!store.knownUsers[uid]) {
             store.knownUsers[uid] = true;
@@ -248,12 +257,13 @@ bot.hears(/.*/, async (ctx) => {
             await sendWelcome(ctx, userNameOf(ctx));
             return;
         }
+        
         await ctx.reply("Используй кнопки ниже 👇", { format: "markdown", attachments: [mainMenuKeyboard()] });
         return;
     }
-
+    
     const form = store.activeForms[uid];
-
+    
     // Шаг 5: ФОТО
     if (form.step === "photo") {
         const photos = getPhotos(ctx);
@@ -271,43 +281,36 @@ bot.hears(/.*/, async (ctx) => {
         }
         return;
     }
-
-    if (typeof text === "string" && text.startsWith("/")) {
-        if (text.toLowerCase() === "/отмена") {
-            delete store.activeForms[uid];
-            saveStore();
-            await ctx.reply("❌ Создание объявления отменено.", { format: "markdown", attachments: [mainMenuKeyboard()] });
-        }
-        return;
-    }
+    
+    if (typeof text === "string" && text.startsWith("/")) return;
     if (!text || typeof text !== "string") return;
-
+    
     if (text.toLowerCase() === "отмена") {
         delete store.activeForms[uid];
         saveStore();
         await ctx.reply("❌ Создание объявления отменено.", { format: "markdown", attachments: [mainMenuKeyboard()] });
         return;
     }
-
+    
     // Шаг 1: Название
     if (form.step === "title") {
         form.title = text.trim();
         form.step = "description";
         saveStore();
-        await ctx.reply(`✅ Название: **${form.title}**\n\n**Шаг 2 из 8:** Описание товара\n\n_Состояние, комплектация, детали_`, { format: "markdown" });
+        await ctx.reply(`✅ Название: **${form.title}**\n\n**Шаг 2 из 8:** Описание товара\n\n_Напиши состояние, комплектацию и другие детали_`, { format: "markdown" });
         return;
     }
-
+    
     // Шаг 2: Описание
     if (form.step === "description") {
         form.description = text.trim();
         form.step = "price";
         saveStore();
         const priceMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🎁 Отдам даром", "price:free")]]);
-        await ctx.reply(`✅ Описание сохранено\n\n**Шаг 3 из 8:** Какая цена?\n\n_Напиши цену числом в рублях или нажми кнопку:_`, { format: "markdown", attachments: [priceMenu] });
+        await ctx.reply(`✅ Описание сохранено\n\n**Шаг 3 из 8:** Какая цена?\n\n_Напиши цену в рублях или нажми кнопку:_`, { format: "markdown", attachments: [priceMenu] });
         return;
     }
-
+    
     // Шаг 3: Цена
     if (form.step === "price") {
         const price = parseInt(text.replace(/\D/g, ""));
@@ -320,7 +323,7 @@ bot.hears(/.*/, async (ctx) => {
         await ctx.reply(`✅ Цена: **${fmtPrice(form.price)}**\n\n**Шаг 4 из 8:** Где ты находишься?\n\n_Напиши деревню или СНТ (например: д. Бояркино или СНТ \"Берёзка\")_`, { format: "markdown" });
         return;
     }
-
+    
     // Шаг 4: Местоположение
     if (form.step === "location") {
         form.location = text.trim();
@@ -333,7 +336,7 @@ bot.hears(/.*/, async (ctx) => {
         await ctx.reply(`✅ Место: **${form.location}**\n\n**Шаг 5 из 8:** Прикрепи фото товара\n\n_Можно прислать несколько сразу (до 10). Когда закончишь — нажми «✅ Готово»_`, { format: "markdown", attachments: [photoMenu] });
         return;
     }
-
+    
     // Шаг 6: Телефон (обязательный)
     if (form.step === "phone") {
         const phone = text.trim();
@@ -347,12 +350,13 @@ bot.hears(/.*/, async (ctx) => {
         await ctx.reply(`✅ Телефон: **${form.phone}**\n\n**Шаг 7 из 8:** Как к вам обращаться?\n\n_Напиши имя для объявления (например: Виктор или Анна Петровна)_`, { format: "markdown" });
         return;
     }
-
+    
     // Шаг 7: Имя продавца
     if (form.step === "name") {
         form.sellerName = text.trim();
         form.step = "confirm";
         saveStore();
+        
         const count = (form.photos || []).length;
         const confirmMenu = Keyboard.inlineKeyboard([
             [Keyboard.button.callback("✅ Опубликовать", "publish:yes")],
@@ -371,7 +375,7 @@ bot.action(/^photo:(.+)$/, async (ctx) => {
     const uid = userIdOf(ctx);
     if (!store.activeForms[uid]) return;
     const form = store.activeForms[uid];
-
+    
     if (action === "done") {
         form.step = "phone";
         saveStore();
@@ -385,12 +389,12 @@ bot.action(/^photo:(.+)$/, async (ctx) => {
 bot.action(/^publish:(.+)$/, async (ctx) => {
     const action = ctx.match[1];
     const uid = userIdOf(ctx);
-
+    
     if (action === "no") {
         if (store.activeForms[uid]) { delete store.activeForms[uid]; saveStore(); }
         return replyPrivate(ctx, uid, "❌ Создание объявления отменено.", { format: "markdown", attachments: [mainMenuKeyboard()] });
     }
-
+    
     if (action === "yes" && store.activeForms[uid]) {
         const form = store.activeForms[uid];
         await finalizeListing(ctx, form, uid);
@@ -411,11 +415,11 @@ async function finalizeListing(ctx, form, uid) {
         status: "active",
         createdAt: Date.now(),
     };
-
+    
     store.items.push(newItem);
     delete store.activeForms[uid];
     saveStore();
-
+    
     const privateText = [
         "📤 **Поделись объявлением с соседями!**",
         "",
@@ -428,39 +432,16 @@ async function finalizeListing(ctx, form, uid) {
         "",
         CHANNEL_LINK
     ].join("\n");
-
+    
     try {
         await ctx.reply(privateText, { format: "markdown" });
     } catch (err) {
         console.error("❌ Ошибка ответа продавцу:", err);
     }
-
-    await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
+    
+    const res = await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
     console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length})`);
 }
-
-// ── ⏰ ВНУТРЕННИЙ БУДИЛЬНИК: вечерний дайджест (19:00 МСК) ──
-let lastDigestDay = "";
-function mskNow() { return new Date(Date.now() + 3 * 3600 * 1000); }
-async function postDigest() {
-    const active = store.items.filter(i => i.status === "active");
-    if (!active.length) { console.log("📰 Дайджест: активных объявлений нет"); return; }
-    const last = active.slice(-10).reverse();
-    const lines = ["📰 Вечерняя витрина «У соседа»!", ""];
-    for (const i of last) lines.push(`• ${i.title} — ${fmtPrice(i.price)} (${i.location})`);
-    lines.push("", "📢 Подать своё объявление: кнопка под любым постом или " + BOT_LINK);
-    await bot.api.sendMessageToChat(CHANNEL_ID, lines.join("\n"));
-    console.log("📰 Дайджест опубликован (" + last.length + ")");
-}
-setInterval(() => {
-    const d = mskNow();
-    const key = String(d.getUTCHours()).padStart(2, "0") + ":" + String(d.getUTCMinutes()).padStart(2, "0");
-    const day = d.toISOString().slice(0, 10);
-    if (key === DIGEST_TIME && lastDigestDay !== day) {
-        lastDigestDay = day;
-        postDigest().catch(e => console.log("⚠️ Дайджест: " + e.message));
-    }
-}, 30000);
 
 // ── ВЕБ-СЕРВЕР ─────────────────────────────────────────────
 const http = await import("node:http");
@@ -482,5 +463,5 @@ process.on("unhandledRejection", (err) => {
     }
 });
 
-console.log("🚀 Барахолка «У соседа» (Бояркино) v4 запускается… Будильник: " + DIGEST_TIME + " МСК");
+console.log("🚀 Барахолка «У соседа» (Бояркино) v5 запускается… Будильник: ОТКЛЮЧЁН");
 bot.start();
