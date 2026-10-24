@@ -206,7 +206,8 @@ async function sendWelcome(ctx, name) {
 }
 
 async function beginListing(ctx, uid) {
-    if (!uid || isFromChannel(ctx)) return;
+    // Старые посты содержат callback из канала: продолжаем писать автору лично.
+    if (!uid) return;
     store.knownUsers[uid] = true;
     store.activeForms[uid] = { step: "title", userId: uid, photos: [], createdAt: Date.now() };
     saveStore();
