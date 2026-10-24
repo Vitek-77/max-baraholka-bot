@@ -5,12 +5,15 @@
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 // ── НАСТРОЙКИ ──────────────────────────────────────────────
 const TOKEN = process.env.BOT_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID ? Number(process.env.CHANNEL_ID) : -78241752722859;
 const CHANNEL_LINK = process.env.CHANNEL_LINK || "https://max.ru/channel_usoseda";
-const BOT_LINK = process.env.BOT_LINK || "https://max.ru/BaraholkaBot";
+const BOT_LINK = "https://max.ru/id772021011900_1_bot";
+const SELL_LINK = `${BOT_LINK}?start=sell`;
+const MAX_API = "https://platform-api2.max.ru";
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
 const STORE_FILE = new URL("./store.json", import.meta.url);
@@ -126,21 +129,37 @@ function buildChannelText(item) {
     ].join("\n");
 }
 
-// 🤖 Кнопка-ссылка "Перейти в бота" (работает на любых телефонах)
-function botLinkButton() {
-    try {
-        if (typeof Keyboard.button.link === "function") {
-            return Keyboard.button.link("🤖 Перейти в бота", BOT_LINK);
-        }
-    } catch (e) {}
-    return { type: "link", text: "🤖 Перейти в бота", url: BOT_LINK };
-}
-
+// В канале остаётся ровно одна кнопка: она сразу открывает личный диалог с ботом.
+// ?start=sell сообщает боту, что посетитель хочет подать объявление.
 function buildChannelButtons(item) {
     return Keyboard.inlineKeyboard([
-        [Keyboard.button.callback("📢 Подать объявление", "menu:sell")],
-        [botLinkButton()]
+        [Keyboard.button.link("📢 Подать объявление", SELL_LINK)]
     ]);
+}
+
+// Подпись подтверждает право удалить именно собственный пост.
+// Она хранится в личной кнопке автора в MAX и не зависит от store.json Render.
+function deleteSignature(userId, postId) {
+    return createHmac("sha256", TOKEN)
+        .update("delete-post-v1:" + String(userId) + ":" + String(postId))
+        .digest("hex").slice(0, 24);
+}
+function validDeleteSignature(userId, postId, signature) {
+    if (!userId || !/^[a-f0-9]{24}$/.test(String(signature))) return false;
+    const expected = Buffer.from(deleteSignature(userId, postId), "hex");
+    const actual = Buffer.from(signature, "hex");
+    return expected.length === actual.length && timingSafeEqual(expected, actual);
+}
+function deleteKeyboard(uid, mid, confirmation = false) {
+    const sig = deleteSignature(uid, mid);
+    return Keyboard.inlineKeyboard(confirmation
+        ? [[Keyboard.button.callback("✅ Да, удалить из канала", `del:yes:${mid}:${sig}`)],
+           [Keyboard.button.callback("↩️ Оставить объявление", `del:no:${mid}:${sig}`)]]
+        : [[Keyboard.button.callback("🗑 Снять моё объявление", `del:ask:${mid}:${sig}`)]]
+    );
+}
+function sentPostId(result) {
+    return result?.body?.mid || result?.message?.body?.mid || result?.mid || null;
 }
 
 // ── ОТПРАВКА В КАНАЛ ───────────────────────────────────────
@@ -180,17 +199,37 @@ async function sendToChannel(text, libAttachments) {
 
 // ── ПРИВЕТСТВИЕ ────────────────────────────────────────────
 async function sendWelcome(ctx, name) {
-    const welcomeText = `Привет, ${name}! 👋\n\nЯ бот барахолки «У соседа» — Бояркино и окрестности.\nЗдесь соседи продают, покупают и меняются вещами.\n\nЧто хочешь сделать?`;
+    const welcomeText = `Привет, ${name}! 👋\n\nЯ бот барахолки «У соседа» — Бояркино и окрестности.\nЗдесь соседи продают, покупают и меняются вещами.\n\n📢 Чтобы разместить объявление, нажми «Подать объявление»: я задам 8 простых вопросов, можно прикрепить до 10 фото.\n\n🗑 После публикации в этом чате будет личная кнопка удаления, если вещь продана или объявление уже не нужно.`;
     await ctx.reply(welcomeText, { format: "markdown", attachments: [mainMenuKeyboard()] });
 }
 
-bot.command("start", async (ctx) => {
-    if (isFromChannel(ctx)) return; // 🛡️ игнорируем канал
-    const uid = userIdOf(ctx);
-    if (store.activeForms[uid]) { delete store.activeForms[uid]; saveStore(); }
+async function beginListing(ctx, uid) {
+    if (!uid || isFromChannel(ctx)) return;
     store.knownUsers[uid] = true;
+    store.activeForms[uid] = { step: "title", userId: uid, photos: [], createdAt: Date.now() };
     saveStore();
-    await sendWelcome(ctx, userNameOf(ctx));
+    await replyPrivate(ctx, uid,
+        `Привет, ${userNameOf(ctx)}! 👋\n\nДобро пожаловать в барахолку «У соседа»!\n\n📝 Я помогу опубликовать объявление. Ответь на 8 простых вопросов: название, описание, цена, место, фото, телефон, имя и подтверждение. После публикации пришлю кнопку для удаления.\n\n**Шаг 1 из 8:** Что будем выкладывать?\n\n_Напиши название товара, например «Велосипед»._`,
+        { format: "markdown" });
+}
+
+// Открытие ссылки из канала вызывает событие bot_started с payload=sell.
+bot.on("bot_started", async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    const uid = userIdOf(ctx);
+    if (ctx.update?.payload === "sell" || ctx.payload === "sell") {
+        await beginListing(ctx, uid);
+    } else {
+        store.knownUsers[uid] = true;
+        saveStore();
+        await replyPrivate(ctx, uid,
+            `Привет, ${userNameOf(ctx)}! Выбери, что хочешь сделать:\n\n📢 Подать объявление — 8 простых шагов.\n🗑 После публикации получишь кнопку для удаления объявления.`,
+            { attachments: [mainMenuKeyboard()] });
+    }
+});
+bot.command("start", async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    await beginListing(ctx, userIdOf(ctx));
 });
 
 // ── КНОПКА: ОТДАМ ДАРОМ ────────────────────────────────────
@@ -216,20 +255,14 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     console.log("🔘 Нажата кнопка: " + action + " от юзера " + uid);
     
     if (action === "sell") {
-        store.activeForms[uid] = {
-            step: "title", userId: uid, photos: [], createdAt: Date.now()
-        };
-        saveStore();
-        await replyPrivate(ctx, uid,
-            "📝 **Создание объявления**\n\n**Шаг 1 из 8:** Что будем выкладывать в объявлении?\n\n_Напиши название (например: велосипед)_",
-            { format: "markdown" });
+        await beginListing(ctx, uid);
         return;
     }
     
     if (action === "help") {
         const backMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🔙 Назад в меню", "menu:back")]]);
         await replyPrivate(ctx, uid,
-            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление»\n2️⃣ Ответь на 8 вопросов бота\n3️⃣ Объявление появится в канале «У соседа»\n4️⃣ Соседи увидят его и смогут позвонить\n\n📤 Чтобы поделиться — нажми стрелочку пересылки у поста!\n\n🤖 **Если кнопки не нажимаются:**\nнажми под постом «Перейти в бота» и отправь боту любой символ — он ответит!\n\nМожно прикрепить до 10 фото!\nВещь можно отдать **даром** 🎁\nОтмена создания: напиши `/отмена`",
+            "❓ **Как пользоваться:**\n\n1️⃣ Нажми «Подать объявление» под постом — бот откроется в личном чате.\n2️⃣ Ответь на 8 вопросов. При желании добавь до 10 фотографий.\n3️⃣ Подтверди публикацию — объявление появится в канале.\n4️⃣ В этом чате придёт кнопка «Снять моё объявление». Используй её, когда объявление перестанет быть актуальным.\n\nЕсли бот уже был открыт раньше, нажми в личном чате «Подать объявление» или отправь /start.\n\nВещь можно отдать даром. Для отмены введи «отмена».",
             { format: "markdown", attachments: [backMenu] });
         return;
     }
@@ -401,9 +434,51 @@ bot.action(/^publish:(.+)$/, async (ctx) => {
     }
 });
 
+// Удаление собственных объявлений доступно из личной карточки управления.
+// Подписанный callback работает даже после перезапуска бесплатного Render.
+bot.action(/^del:(ask|yes|no):((?:mid\\.)?[A-Za-z0-9_-]+):([a-f0-9]{24})$/, async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    const [, action, mid, sig] = ctx.match;
+    const uid = userIdOf(ctx);
+    if (!validDeleteSignature(uid, mid, sig)) {
+        await replyPrivate(ctx, uid, "⛔ Удалить объявление может только его автор.");
+        return;
+    }
+    if (action === "ask") {
+        await replyPrivate(ctx, uid, "🗑 **Точно удалить это объявление из канала?**\n\nОтменить удаление после подтверждения нельзя.",
+            { format: "markdown", attachments: [deleteKeyboard(uid, mid, true)] });
+        return;
+    }
+    if (action === "no") {
+        await replyPrivate(ctx, uid, "✅ Объявление остаётся в канале.", { attachments: [deleteKeyboard(uid, mid)] });
+        return;
+    }
+    try {
+        const response = await fetch(MAX_API + "/messages?message_id=" + encodeURIComponent(mid), {
+            method: "DELETE",
+            headers: { Authorization: TOKEN },
+            signal: AbortSignal.timeout(15000)
+        });
+        const result = await response.json().catch(() => ({}));
+        if (!response.ok || result.success !== true) {
+            throw new Error("HTTP " + response.status + ": " + (result.message || "MAX не подтвердил удаление"));
+        }
+        const item = store.items.find(item => String(item.channelMessageId) === String(mid));
+        if (item) item.status = "deleted";
+        saveStore();
+        await replyPrivate(ctx, uid, "✅ Объявление удалено из канала «У соседа». Спасибо, что поддерживаешь актуальность объявлений!", { attachments: [mainMenuKeyboard()] });
+        console.log("🗑 Автор удалил пост " + mid);
+    } catch (error) {
+        console.error("❌ Ошибка удаления " + mid + ": " + (error?.message || error));
+        await replyPrivate(ctx, uid,
+            "⚠️ Не удалось удалить объявление. Возможно, оно уже удалено, либо у бота нет права на удаление публикаций. Повтори попытку позже или обратись к администратору.",
+            { attachments: [deleteKeyboard(uid, mid)] });
+    }
+});
+
 async function finalizeListing(ctx, form, uid) {
     const newItem = {
-        id: store.nextId++,
+        id: store.nextId,
         sellerId: form.userId,
         sellerName: form.sellerName,
         title: form.title,
@@ -415,32 +490,27 @@ async function finalizeListing(ctx, form, uid) {
         status: "active",
         createdAt: Date.now(),
     };
-    
+    // Сначала публикуем: не объявляем успех и не удаляем форму до подтверждения от MAX.
+    const res = await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
+    if (!res) {
+        await replyPrivate(ctx, uid, "⚠️ Объявление пока не опубликовано. Данные сохранены — нажми «Опубликовать» ещё раз чуть позже.");
+        return;
+    }
+    const mid = sentPostId(res);
+    store.nextId++;
+    newItem.channelMessageId = mid;
     store.items.push(newItem);
     delete store.activeForms[uid];
     saveStore();
-    
-    const privateText = [
-        "📤 **Поделись объявлением с соседями!**",
-        "",
-        `🏷️ **${newItem.title}**`,
-        `📝 **Описание:** ${newItem.description}`,
-        `💰 **Цена:** ${fmtPrice(newItem.price)}`,
-        `📍 **Где:** ${newItem.location}`,
-        `📞 **Телефон:** ${newItem.phone}`,
-        `👤 **Продавец:** ${newItem.sellerName}`,
-        "",
-        CHANNEL_LINK
-    ].join("\n");
-    
-    try {
-        await ctx.reply(privateText, { format: "markdown" });
-    } catch (err) {
-        console.error("❌ Ошибка ответа продавцу:", err);
+
+    console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length}, post ID: ${mid || "не найден"})`);
+    if (!mid) {
+        await replyPrivate(ctx, uid, "✅ Объявление опубликовано!\n\n⚠️ MAX не вернул идентификатор поста, поэтому автоматическая кнопка удаления недоступна. Для удаления этого объявления обратись к администратору канала.");
+        return;
     }
-    
-    const res = await sendToChannel(buildChannelText(newItem), [...newItem.photos, buildChannelButtons(newItem)]);
-    console.log(`✅ Создано объявление №${newItem.id}: ${newItem.title} (фото: ${newItem.photos.length})`);
+    await replyPrivate(ctx, uid,
+        `✅ **Объявление опубликовано!**\n\n🏷️ ${newItem.title}\n\n📢 Посмотреть: ${CHANNEL_LINK}\n\nКогда товар продан или объявление перестало быть актуальным, нажми кнопку ниже. Сохрани это сообщение — оно позволяет тебе удалить свой пост даже после перезапуска бота.`,
+        { format: "markdown", attachments: [deleteKeyboard(uid, mid)] });
 }
 
 // ── ВЕБ-СЕРВЕР ─────────────────────────────────────────────
