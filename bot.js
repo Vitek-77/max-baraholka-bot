@@ -132,9 +132,11 @@ function buildChannelText(item) {
 // В канале остаётся ровно одна кнопка: она сразу открывает личный диалог с ботом.
 // ?start=sell сообщает боту, что посетитель хочет подать объявление.
 function buildChannelButtons(item) {
-    return Keyboard.inlineKeyboard([
-        [Keyboard.button.link("📢 Подать объявление", SELL_LINK)]
-    ]);
+    // На разных сборках SDK link может отсутствовать; используем формат MAX API напрямую.
+    const button = typeof Keyboard.button.link === "function"
+        ? Keyboard.button.link("📢 Подать объявление", SELL_LINK)
+        : { type: "link", text: "📢 Подать объявление", url: SELL_LINK };
+    return Keyboard.inlineKeyboard([[button]]);
 }
 
 // Подпись подтверждает право удалить именно собственный пост.
