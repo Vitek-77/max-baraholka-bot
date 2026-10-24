@@ -436,7 +436,7 @@ bot.action(/^publish:(.+)$/, async (ctx) => {
 
 // Удаление собственных объявлений доступно из личной карточки управления.
 // Подписанный callback работает даже после перезапуска бесплатного Render.
-bot.action(/^del:(ask|yes|no):((?:mid\\.)?[A-Za-z0-9_-]+):([a-f0-9]{24})$/, async (ctx) => {
+bot.action(/^del:(ask|yes|no):((?:mid\.)?[A-Za-z0-9_-]+):([a-f0-9]{24})$/, async (ctx) => {
     if (isFromChannel(ctx)) return;
     const [, action, mid, sig] = ctx.match;
     const uid = userIdOf(ctx);
