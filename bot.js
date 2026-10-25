@@ -5,7 +5,7 @@
 
 import { Bot, Keyboard } from "@maxhub/max-bot-api";
 import { readFileSync, writeFileSync, existsSync } from "node:fs";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHmac, timingSafeEqual, randomBytes } from "node:crypto";
 
 // ── НАСТРОЙКИ ──────────────────────────────────────────────
 const TOKEN = process.env.BOT_TOKEN;
@@ -199,6 +199,162 @@ async function sendToChannel(text, libAttachments) {
     return null;
 }
 
+// ── НАВИГАЦИЯ ПО ОБЪЯВЛЕНИЮ ────────────────────────────────
+const FORM_STEPS = ["title", "description", "price", "location", "photo", "phone", "name", "confirm"];
+function draftId(form) {
+    if (!form.draftId) {
+        form.draftId = randomBytes(6).toString("hex");
+        saveStore();
+    }
+    return form.draftId;
+}
+function stepKeyboard(form) {
+    const id = draftId(form);
+    const s = form.step;
+    const cb = (label, action) => Keyboard.button.callback(label, action);
+    const rows = [];
+    if (s === "confirm") {
+        rows.push([cb("✅ Опубликовать", "publish:yes:" + id)]);
+        rows.push([cb("✏️ Изменить данные", "nav:edit:" + id)]);
+    } else if (s === "price") {
+        rows.push([cb("🎁 Отдам даром", "price:free:" + id)]);
+    } else if (s === "photo") {
+        rows.push([cb("✅ Готово, далее", "photo:done:" + id)]);
+        if ((form.photos || []).length) rows.push([cb("🗑 Удалить все фото", "photo:clear:" + id)]);
+    }
+    if (s !== "title") rows.push([cb("⬅️ К предыдущему шагу", "nav:back:" + id + ":" + s)]);
+    if (form.editing && s !== "confirm") rows.push([cb("↩️ К предпросмотру", "nav:review:" + id + ":" + s)]);
+    rows.push([cb("❌ Отменить оформление", "nav:cancel:" + id)]);
+    return Keyboard.inlineKeyboard(rows);
+}
+async function askStep(ctx, uid, form, note = "") {
+    const s = form.step;
+    const n = FORM_STEPS.indexOf(s);
+    if (n === -1) return;
+    let t = note ? note + "\n\n" : "";
+    if (s === "confirm") {
+        t += "**Предпросмотр объявления:**\n\n" +
+            "🏷 **" + (form.title || "—") + "**\n" +
+            "📝 **Описание:** " + (form.description || "—") + "\n" +
+            "💰 **Цена:** " + (form.price == null ? "—" : fmtPrice(form.price)) + "\n" +
+            "📍 **Где:** " + (form.location || "—") + "\n" +
+            "📷 **Фото:** " + (form.photos || []).length + " шт.\n" +
+            "📞 **Телефон:** " + (form.phone || "—") + "\n" +
+            "👤 **Продавец:** " + (form.sellerName || "—") + "\n\n" +
+            "**Шаг 8 из 8:** Проверь данные. Можно исправить любое поле или вернуться на шаг 7.";
+    } else {
+        const prompts = {
+            title: ["Что будем выкладывать?", "Напиши название товара, например «Велосипед»."],
+            description: ["Описание товара", "Напиши состояние, комплектацию и другие детали."],
+            price: ["Какая цена?", "Напиши цену в рублях или нажми «🎁 Отдам даром»."],
+            location: ["Где ты находишься?", "Напиши деревню или СНТ, например Бояркино."],
+            photo: ["Прикрепи фотографии", "До 10 фото. Когда закончишь — нажми «✅ Готово, далее». Можно и без фото."],
+            phone: ["Твой телефон для связи", "Напиши номер, например 8-999-123-45-67."],
+            name: ["Как к тебе обращаться?", "Напиши имя для объявления."]
+        };
+        const current = {
+            title: form.title, description: form.description,
+            price: form.price == null ? null : fmtPrice(form.price),
+            location: form.location, photo: (form.photos || []).length + " шт.",
+            phone: form.phone, name: form.sellerName
+        };
+        t += "**Шаг " + (n + 1) + " из 8:** " + prompts[s][0] + "\n\n_" + prompts[s][1] + "_";
+        if (current[s] != null && current[s] !== "") t += "\n\nТекущее значение: " + current[s];
+        if (form.editing) t += "\n\n✏️ После исправления сразу вернёмся к предпросмотру.";
+    }
+    return replyPrivate(ctx, uid, t, { format: "markdown", attachments: [stepKeyboard(form)] });
+}
+async function nextStep(ctx, uid, form, next, note) {
+    if (form.editing) {
+        form.editing = false;
+        form.step = "confirm";
+    } else {
+        form.step = next;
+    }
+    form.cancelPending = false;
+    form.clearPending = false;
+    saveStore();
+    return askStep(ctx, uid, form, note);
+}
+async function outdatedButton(ctx, uid) {
+    return replyPrivate(ctx, uid, "⚠️ Эта кнопка от другого шага или старого объявления. Используй кнопки в последнем сообщении бота.");
+}
+function editMenu(form) {
+    const id = draftId(form);
+    const cb = (label, step) => Keyboard.button.callback(label, "nav:field:" + id + ":" + step);
+    return Keyboard.inlineKeyboard([
+        [cb("🏷 Название", "title"), cb("📝 Описание", "description")],
+        [cb("💰 Цена", "price"), cb("📍 Место", "location")],
+        [cb("📷 Фотографии", "photo"), cb("📞 Телефон", "phone")],
+        [cb("👤 Имя", "name")],
+        [Keyboard.button.callback("↩️ К предпросмотру", "nav:show:" + id)]
+    ]);
+}
+async function confirmCancel(ctx, uid, form) {
+    const id = draftId(form);
+    form.cancelPending = true;
+    saveStore();
+    return replyPrivate(ctx, uid, "⚠️ Точно отменить объявление? Только после подтверждения заполненные ответы будут удалены.", {
+        attachments: [Keyboard.inlineKeyboard([
+            [Keyboard.button.callback("🗑 Да, отменить", "nav:cancel_yes:" + id)],
+            [Keyboard.button.callback("↩️ Нет, продолжить", "nav:cancel_no:" + id)]
+        ])]
+    });
+}
+bot.action(/^nav:(back|edit|field|review|show|cancel|cancel_yes|cancel_no):([a-f0-9]{12})(?::([a-z]+))?$/, async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    const [, action, id, field] = ctx.match;
+    const uid = userIdOf(ctx);
+    const form = store.activeForms[uid];
+    if (!form || draftId(form) !== id) return outdatedButton(ctx, uid);
+    if (action === "cancel") return confirmCancel(ctx, uid, form);
+    if (action === "cancel_yes") {
+        if (!form.cancelPending) return outdatedButton(ctx, uid);
+        delete store.activeForms[uid];
+        saveStore();
+        return replyPrivate(ctx, uid, "❌ Объявление отменено.", { attachments: [mainMenuKeyboard()] });
+    }
+    if (action === "cancel_no") {
+        form.cancelPending = false;
+        saveStore();
+        return askStep(ctx, uid, form, "✅ Продолжаем. Все ответы сохранены.");
+    }
+    form.cancelPending = false;
+    if (action === "back") {
+        if (form.step !== field) return outdatedButton(ctx, uid);
+        const i = FORM_STEPS.indexOf(field);
+        if (i < 1) return askStep(ctx, uid, form);
+        form.step = FORM_STEPS[i - 1];
+        form.editing = false;
+        form.clearPending = false;
+        saveStore();
+        return askStep(ctx, uid, form, "↩️ Вернулись назад. Предыдущие ответы сохранены, можешь их заменить.");
+    }
+    if (action === "edit") {
+        if (form.step !== "confirm") return outdatedButton(ctx, uid);
+        return replyPrivate(ctx, uid, "✏️ **Что исправить?** Выбери поле — остальные ответы сохранятся.",
+            { format: "markdown", attachments: [editMenu(form)] });
+    }
+    if (action === "show") {
+        if (form.step !== "confirm") return outdatedButton(ctx, uid);
+        return askStep(ctx, uid, form);
+    }
+    if (action === "field") {
+        if (form.step !== "confirm" || !FORM_STEPS.slice(0, 7).includes(field)) return outdatedButton(ctx, uid);
+        form.editing = true;
+        form.step = field;
+        saveStore();
+        return askStep(ctx, uid, form, "✏️ Изменение выбранного поля");
+    }
+    if (action === "review") {
+        if (form.step !== field || !form.editing) return outdatedButton(ctx, uid);
+        form.step = "confirm";
+        form.editing = false;
+        saveStore();
+        return askStep(ctx, uid, form, "↩️ Вернулись к предпросмотру без изменений.");
+    }
+});
+
 // ── ПРИВЕТСТВИЕ ────────────────────────────────────────────
 async function sendWelcome(ctx, name) {
     const welcomeText = `Привет, ${name}! 👋\n\nЯ бот барахолки «У соседа» — Бояркино и окрестности.\nЗдесь соседи продают, покупают и меняются вещами.\n\n📢 Чтобы разместить объявление, нажми «Подать объявление»: я задам 8 простых вопросов, можно прикрепить до 10 фото.\n\n🗑 После публикации в этом чате будет личная кнопка удаления, если вещь продана или объявление уже не нужно.`;
@@ -206,14 +362,21 @@ async function sendWelcome(ctx, name) {
 }
 
 async function beginListing(ctx, uid) {
-    // Старые посты содержат callback из канала: продолжаем писать автору лично.
     if (!uid) return;
     store.knownUsers[uid] = true;
-    store.activeForms[uid] = { step: "title", userId: uid, photos: [], createdAt: Date.now() };
+    if (store.activeForms[uid]) {
+        return askStep(ctx, uid, store.activeForms[uid],
+            "📝 У тебя уже есть начатое объявление. Продолжим с того же места.");
+    }
+    const form = {
+        step: "title", userId: uid, photos: [], createdAt: Date.now(),
+        draftId: randomBytes(6).toString("hex")
+    };
+    store.activeForms[uid] = form;
     saveStore();
-    await replyPrivate(ctx, uid,
-        `Привет, ${userNameOf(ctx)}! 👋\n\nДобро пожаловать в барахолку «У соседа»!\n\n📝 Я помогу опубликовать объявление. Ответь на 8 простых вопросов: название, описание, цена, место, фото, телефон, имя и подтверждение. После публикации пришлю кнопку для удаления.\n\n**Шаг 1 из 8:** Что будем выкладывать?\n\n_Напиши название товара, например «Велосипед»._`,
-        { format: "markdown" });
+    return askStep(ctx, uid, form,
+        "Привет, " + userNameOf(ctx) + "! 👋\n\n" +
+        "Я помогу подать объявление за 8 шагов. Всегда можно вернуться назад, а перед публикацией исправить любой ответ.");
 }
 
 // Открытие ссылки из канала вызывает событие bot_started с payload=sell.
@@ -236,19 +399,12 @@ bot.command("start", async (ctx) => {
 });
 
 // ── КНОПКА: ОТДАМ ДАРОМ ────────────────────────────────────
-bot.action(/^price:(.+)$/, async (ctx) => {
-    const action = ctx.match[1];
-    const uid = userIdOf(ctx);
-    
-    if (action === "free" && store.activeForms[uid]) {
-        const form = store.activeForms[uid];
-        form.price = 0;
-        form.step = "location";
-        saveStore();
-        await replyPrivate(ctx, uid,
-            "✅ Цена: **🎁 Бесплатно / отдам даром**\n\n**Шаг 4 из 8:** Где ты находишься?\n\n_Напиши деревню или СНТ (например: д. Бояркино или СНТ \"Берёзка\")_",
-            { format: "markdown" });
-    }
+bot.action(/^price:free(?::([a-f0-9]{12}))?$/, async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    const uid = userIdOf(ctx), form = store.activeForms[uid], id = ctx.match[1];
+    if (!form || form.step !== "price" || (id && draftId(form) !== id)) return outdatedButton(ctx, uid);
+    form.price = 0;
+    return nextStep(ctx, uid, form, "location", "✅ Цена: 🎁 Бесплатно");
 });
 
 // ── МЕНЮ ───────────────────────────────────────────────────
@@ -278,162 +434,117 @@ bot.action(/^menu:(.+)$/, async (ctx) => {
     }
 });
 
-// ── ОБРАБОТКА ВСЕХ СООБЩЕНИЙ ───────────────────────────────
-
+// ── ОБРАБОТКА СООБЩЕНИЙ ────────────────────────────────────
 bot.hears(/.*/, async (ctx) => {
-    if (isFromChannel(ctx)) return; // 🛡️ ГЛАВНАЯ ЗАЩИТА: свои посты в канале бот не читает
-    
+    if (isFromChannel(ctx)) return;
     const uid = userIdOf(ctx);
     const text = getText(ctx);
-    
-    if (!store.activeForms[uid]) {
+    const form = store.activeForms[uid];
+    if (!form) {
         if (!store.knownUsers[uid]) {
             store.knownUsers[uid] = true;
             saveStore();
-            await sendWelcome(ctx, userNameOf(ctx));
-            return;
+            return sendWelcome(ctx, userNameOf(ctx));
         }
-        
-        await ctx.reply("Используй кнопки ниже 👇", { format: "markdown", attachments: [mainMenuKeyboard()] });
-        return;
+        return replyPrivate(ctx, uid, "Используй кнопки ниже 👇", { attachments: [mainMenuKeyboard()] });
     }
-    
-    const form = store.activeForms[uid];
-    
-    // Шаг 5: ФОТО
+    const value = typeof text === "string" ? text.trim() : "";
+    if (value.toLowerCase() === "отмена") return confirmCancel(ctx, uid, form);
     if (form.step === "photo") {
         const photos = getPhotos(ctx);
-        if (photos.length > 0) {
-            form.photos = form.photos || [];
-            form.photos.push(...photos);
-            if (form.photos.length > 10) form.photos = form.photos.slice(0, 10);
+        if (photos.length) {
+            form.photos = (form.photos || []).concat(photos).slice(0, 10);
+            form.clearPending = false;
             saveStore();
-            const doneMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("✅ Готово", "photo:done")]]);
-            await ctx.reply(`✅ Добавлено! Всего фото: **${form.photos.length}**\n\n_Пришли ещё или нажми кнопку:_`, { format: "markdown", attachments: [doneMenu] });
-            return;
+            return askStep(ctx, uid, form, "✅ Добавлено фотографий: " + form.photos.length + " из 10.");
         }
-        if (text && typeof text === "string" && !text.startsWith("/")) {
-            await ctx.reply("⚠️ Я не вижу фото. Пришли фотографию или нажми кнопку «Готово»", { format: "markdown" });
-        }
+        if (value && !value.startsWith("/")) return askStep(ctx, uid, form,
+            "⚠️ Не вижу фото. Пришли изображение или нажми «Готово, далее».");
         return;
     }
-    
-    if (typeof text === "string" && text.startsWith("/")) return;
-    if (!text || typeof text !== "string") return;
-    
-    if (text.toLowerCase() === "отмена") {
-        delete store.activeForms[uid];
-        saveStore();
-        await ctx.reply("❌ Создание объявления отменено.", { format: "markdown", attachments: [mainMenuKeyboard()] });
-        return;
-    }
-    
-    // Шаг 1: Название
+    if (value.startsWith("/")) return;
+    if (form.step === "confirm") return askStep(ctx, uid, form,
+        "ℹ️ Для исправления используй кнопку «Изменить данные».");
+    if (!value) return;
     if (form.step === "title") {
-        form.title = text.trim();
-        form.step = "description";
-        saveStore();
-        await ctx.reply(`✅ Название: **${form.title}**\n\n**Шаг 2 из 8:** Описание товара\n\n_Напиши состояние, комплектацию и другие детали_`, { format: "markdown" });
-        return;
+        form.title = value;
+        return nextStep(ctx, uid, form, "description", "✅ Название сохранено.");
     }
-    
-    // Шаг 2: Описание
     if (form.step === "description") {
-        form.description = text.trim();
-        form.step = "price";
-        saveStore();
-        const priceMenu = Keyboard.inlineKeyboard([[Keyboard.button.callback("🎁 Отдам даром", "price:free")]]);
-        await ctx.reply(`✅ Описание сохранено\n\n**Шаг 3 из 8:** Какая цена?\n\n_Напиши цену в рублях или нажми кнопку:_`, { format: "markdown", attachments: [priceMenu] });
-        return;
+        form.description = value;
+        return nextStep(ctx, uid, form, "price", "✅ Описание сохранено.");
     }
-    
-    // Шаг 3: Цена
     if (form.step === "price") {
-        const price = parseInt(text.replace(/\D/g, ""));
-        if (isNaN(price) || price < 0) {
-            return ctx.reply("❌ **Неверная цена!**\n\nНапиши цену числом (например: 5000) или нажми «🎁 Отдам даром»", { format: "markdown" });
-        }
+        const price = parseInt(value.replace(/\D/g, ""), 10);
+        if (!Number.isFinite(price) || price < 0) return askStep(ctx, uid, form, "❌ Укажи цену числом, например 5000.");
         form.price = price;
-        form.step = "location";
-        saveStore();
-        await ctx.reply(`✅ Цена: **${fmtPrice(form.price)}**\n\n**Шаг 4 из 8:** Где ты находишься?\n\n_Напиши деревню или СНТ (например: д. Бояркино или СНТ \"Берёзка\")_`, { format: "markdown" });
-        return;
+        return nextStep(ctx, uid, form, "location", "✅ Цена сохранена.");
     }
-    
-    // Шаг 4: Местоположение
     if (form.step === "location") {
-        form.location = text.trim();
-        form.step = "photo";
-        form.photos = form.photos || [];
-        saveStore();
-        const photoMenu = Keyboard.inlineKeyboard([
-            [Keyboard.button.callback("✅ Готово", "photo:done")]
-        ]);
-        await ctx.reply(`✅ Место: **${form.location}**\n\n**Шаг 5 из 8:** Прикрепи фото товара\n\n_Можно прислать несколько сразу (до 10). Когда закончишь — нажми «✅ Готово»_`, { format: "markdown", attachments: [photoMenu] });
-        return;
+        form.location = value;
+        return nextStep(ctx, uid, form, "photo", "✅ Место сохранено.");
     }
-    
-    // Шаг 6: Телефон (обязательный)
     if (form.step === "phone") {
-        const phone = text.trim();
-        const digits = phone.replace(/\D/g, "");
-        if (digits.length < 10) {
-            return ctx.reply("❌ **Неверный телефон!**\n\nНапиши номер с цифрами (например: 8-999-123-45-67)", { format: "markdown" });
-        }
-        form.phone = phone;
-        form.step = "name";
-        saveStore();
-        await ctx.reply(`✅ Телефон: **${form.phone}**\n\n**Шаг 7 из 8:** Как к вам обращаться?\n\n_Напиши имя для объявления (например: Виктор или Анна Петровна)_`, { format: "markdown" });
-        return;
+        if (value.replace(/\D/g, "").length < 10) return askStep(ctx, uid, form,
+            "❌ Укажи телефон не менее чем из 10 цифр.");
+        form.phone = value;
+        return nextStep(ctx, uid, form, "name", "✅ Телефон сохранён.");
     }
-    
-    // Шаг 7: Имя продавца
     if (form.step === "name") {
-        form.sellerName = text.trim();
-        form.step = "confirm";
-        saveStore();
-        
-        const count = (form.photos || []).length;
-        const confirmMenu = Keyboard.inlineKeyboard([
-            [Keyboard.button.callback("✅ Опубликовать", "publish:yes")],
-            [Keyboard.button.callback("❌ Отменить", "publish:no")]
-        ]);
-        await replyPrivate(ctx, uid,
-            `**Предпросмотр:**\n\n🏷️ **${form.title}**\n📝 **Описание:** ${form.description}\n💰 **Цена:** ${fmtPrice(form.price)}\n📍 **Где:** ${form.location}\n📷 **Фото:** ${count > 0 ? count + " шт." : "нет"}\n📞 **Телефон:** ${form.phone}\n👤 **Продавец:** ${form.sellerName}\n\n**Шаг 8 из 8:** Подтверди публикацию:`,
-            { format: "markdown", attachments: [confirmMenu] });
-        return;
+        form.sellerName = value;
+        return nextStep(ctx, uid, form, "confirm", "✅ Имя сохранено. Проверь объявление перед публикацией.");
     }
 });
 
 // ── КНОПКИ ФОТО ────────────────────────────────────────────
-bot.action(/^photo:(.+)$/, async (ctx) => {
-    const action = ctx.match[1];
-    const uid = userIdOf(ctx);
-    if (!store.activeForms[uid]) return;
-    const form = store.activeForms[uid];
-    
-    if (action === "done") {
-        form.step = "phone";
+bot.action(/^photo:(done|clear|clear_yes|clear_no)(?::([a-f0-9]{12}))?$/, async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    const [, action, id] = ctx.match;
+    const uid = userIdOf(ctx), form = store.activeForms[uid];
+    if (!form || form.step !== "photo" || (id && draftId(form) !== id)) return outdatedButton(ctx, uid);
+    if (action === "done") return nextStep(ctx, uid, form, "phone",
+        "✅ Фотографии сохранены: " + (form.photos || []).length + " шт.");
+    if (action === "clear") {
+        form.clearPending = true;
         saveStore();
-        await replyPrivate(ctx, uid,
-            "✅ Фото сохранены\n\n**Шаг 6 из 8:** Твой номер телефона для связи\n\n_Напиши номер (например: 8-999-123-45-67)_",
-            { format: "markdown" });
+        return replyPrivate(ctx, uid, "⚠️ Удалить все фотографии из черновика?", {
+            attachments: [Keyboard.inlineKeyboard([
+                [Keyboard.button.callback("🗑 Да, убрать фото", "photo:clear_yes:" + draftId(form))],
+                [Keyboard.button.callback("↩️ Оставить фото", "photo:clear_no:" + draftId(form))]
+            ])]
+        });
+    }
+    if (action === "clear_yes") {
+        if (!form.clearPending) return outdatedButton(ctx, uid);
+        form.photos = [];
+        form.clearPending = false;
+        saveStore();
+        return askStep(ctx, uid, form, "✅ Фотографии убраны. Можно прикрепить новые.");
+    }
+    if (action === "clear_no") {
+        form.clearPending = false;
+        saveStore();
+        return askStep(ctx, uid, form, "✅ Фотографии остались.");
     }
 });
 
 // ── ПУБЛИКАЦИЯ / ОТМЕНА ────────────────────────────────────
-bot.action(/^publish:(.+)$/, async (ctx) => {
-    const action = ctx.match[1];
-    const uid = userIdOf(ctx);
-    
-    if (action === "no") {
-        if (store.activeForms[uid]) { delete store.activeForms[uid]; saveStore(); }
-        return replyPrivate(ctx, uid, "❌ Создание объявления отменено.", { format: "markdown", attachments: [mainMenuKeyboard()] });
-    }
-    
-    if (action === "yes" && store.activeForms[uid]) {
-        const form = store.activeForms[uid];
+bot.action(/^publish:(yes|no)(?::([a-f0-9]{12}))?$/, async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    const [, action, id] = ctx.match;
+    const uid = userIdOf(ctx), form = store.activeForms[uid];
+    if (!form || form.step !== "confirm" || (id && draftId(form) !== id)) return outdatedButton(ctx, uid);
+    if (action === "no") return confirmCancel(ctx, uid, form);
+    if (form.publishing) return replyPrivate(ctx, uid, "⏳ Публикация уже выполняется, не нажимай повторно.");
+    form.publishing = true;
+    saveStore();
+    try {
         await finalizeListing(ctx, form, uid);
+    } finally {
+        if (store.activeForms[uid] === form) {
+            form.publishing = false;
+            saveStore();
+        }
     }
 });
 
