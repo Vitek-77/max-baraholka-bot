@@ -14,6 +14,17 @@ const CHANNEL_LINK = process.env.CHANNEL_LINK || "https://max.ru/channel_usoseda
 const BOT_LINK = "https://max.ru/id772021011900_1_bot";
 const SELL_LINK = `${BOT_LINK}?start=sell`;
 const MAX_API = "https://platform-api2.max.ru";
+const ADMIN_MAX_ID = String(process.env.ADMIN_MAX_ID || "").trim();
+const ALERT_TELEGRAM_BOT_TOKEN = String(process.env.ALERT_TELEGRAM_BOT_TOKEN || "").trim();
+const ALERT_TELEGRAM_CHAT_ID = String(process.env.ALERT_TELEGRAM_CHAT_ID || "").trim();
+const BOOT_AT = Date.now();
+let lastMaxProbeAt = 0;
+let lastMaxOkAt = 0;
+let lastMaxError = "";
+let maxProbePromise = null;
+let lastAdminErrorAt = 0;
+let lastAdminErrorText = "";
+
 
 // ── ХРАНИЛИЩЕ ──────────────────────────────────────────────
 const STORE_FILE = new URL("./store.json", import.meta.url);
@@ -112,6 +123,98 @@ async function replyPrivate(ctx, uid, text, opts = {}) {
         }
     }
 }
+
+// ── ТЕХНИЧЕСКИЙ МОНИТОРИНГ ──────────────────────────────────
+// /health работает независимо от корневого /, чтобы UptimeRobot видел
+// остановку Long Polling даже тогда, когда HTTP-сервер продолжает отвечать.
+function pollingActive() {
+    return bot.pollingIsStarted === true;
+}
+async function checkMaxApi() {
+    const now = Date.now();
+    if (maxProbePromise) return maxProbePromise;
+    if (now - lastMaxProbeAt < 30_000) return lastMaxOkAt > 0 && now - lastMaxOkAt < 7 * 60_000;
+    lastMaxProbeAt = now;
+    maxProbePromise = (async () => {
+        try {
+            const response = await fetch(MAX_API + "/me", {
+                headers: { Authorization: TOKEN },
+                signal: AbortSignal.timeout(8_000)
+            });
+            if (!response.ok) throw new Error("MAX API HTTP " + response.status);
+            const info = await response.json();
+            if (info?.is_bot !== true) throw new Error("MAX API ответил без is_bot=true");
+            lastMaxOkAt = Date.now();
+            lastMaxError = "";
+            return true;
+        } catch (error) {
+            lastMaxError = String(error?.message || error).slice(0, 180);
+            console.warn("⚠️ Проверка MAX API: " + lastMaxError);
+            return false;
+        } finally {
+            maxProbePromise = null;
+        }
+    })();
+    return maxProbePromise;
+}
+async function notifyAdmin(text) {
+    const jobs = [];
+    if (ADMIN_MAX_ID && /^\d+$/.test(ADMIN_MAX_ID)) {
+        jobs.push(bot.api.sendMessageToUser(Number(ADMIN_MAX_ID), text)
+            .catch(e => console.warn("⚠️ Не отправилось уведомление в MAX: " + (e?.message || e))));
+    }
+    if (ALERT_TELEGRAM_BOT_TOKEN && ALERT_TELEGRAM_CHAT_ID) {
+        jobs.push(fetch("https://api.telegram.org/bot" + ALERT_TELEGRAM_BOT_TOKEN + "/sendMessage", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: ALERT_TELEGRAM_CHAT_ID, text }),
+            signal: AbortSignal.timeout(8_000)
+        }).then(async (r) => {
+            if (!r.ok) throw new Error("Telegram HTTP " + r.status);
+        }).catch(e => console.warn("⚠️ Не отправилось уведомление в Telegram: " + (e?.message || e))));
+    }
+    if (jobs.length) await Promise.allSettled(jobs);
+}
+function alertAdminOnError(message) {
+    const summary = String(message).slice(0, 350);
+    const now = Date.now();
+    if (now - lastAdminErrorAt < 30 * 60_000) return;
+    lastAdminErrorAt = now;
+    lastAdminErrorText = summary;
+    void notifyAdmin("⚠️ BaraholkaBot: ошибка при работе.\n" + summary +
+        "\n\nЕсли бот не отвечает, проверь монитор UptimeRobot.");
+}
+
+// Команда нужна только для безопасной привязки владельца к приватным алертам.
+bot.command("myid", async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    const uid = userIdOf(ctx);
+    if (uid) await replyPrivate(ctx, uid,
+        "🆔 Твой ID в MAX: " + uid +
+        "\n\nДля личных уведомлений о работе барахолки нужно добавить этот ID в настройки сервера. Токены бота сообщать не нужно.");
+});
+bot.command("status", async (ctx) => {
+    if (isFromChannel(ctx)) return;
+    const uid = userIdOf(ctx);
+    if (!uid) return;
+    if (!ADMIN_MAX_ID || String(uid) !== ADMIN_MAX_ID) {
+        return replyPrivate(ctx, uid, "🔒 Технический статус доступен только администратору. Чтобы подключить его, используй /myid.");
+    }
+    await checkMaxApi();
+    await replyPrivate(ctx, uid,
+        "🩺 BaraholkaBot\n" +
+        "Приём событий MAX: " + (pollingActive() ? "✅ работает" : "❌ остановлен") + "\n" +
+        "MAX API: " + (Date.now() - lastMaxOkAt < 7 * 60_000 ? "✅ доступен" : "❌ нет подтверждения") + "\n" +
+        "Время работы процесса: " + Math.floor((Date.now() - BOOT_AT) / 60_000) + " мин.");
+});
+
+// Обработка ошибок в пользовательских действиях отдельно от транспортного
+// polling: единичная ошибка заявки не должна обрывать получение новых сообщений.
+bot.catch(async (err) => {
+    const message = String(err?.message || err);
+    console.error("❌ Ошибка обработчика MAX: " + message);
+    alertAdminOnError(message);
+});
 
 // ── ТЕКСТ И КНОПКИ ПОСТА ДЛЯ КАНАЛА ────────────────────────
 function buildChannelText(item) {
@@ -627,25 +730,80 @@ async function finalizeListing(ctx, form, uid) {
         { format: "markdown", attachments: [deleteKeyboard(uid, mid)] });
 }
 
-// ── ВЕБ-СЕРВЕР ─────────────────────────────────────────────
+// ── ВЕБ-СЕРВЕР И ПРОВЕРКА РАБОТОСПОСОБНОСТИ ───────────────
 const http = await import("node:http");
 const port = process.env.PORT || 3000;
-http.createServer((req, res) => {
-  res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
-  res.end("Барахолка «У соседа» работает! ✅");
-}).listen(port, () => {
-  console.log("🌐 Веб-сервер запущен на порту " + port);
-});
-
-// ── ЗАПУСК И АВТОПЕРЕЗАПУСК ────────────────────────────────
-process.on("unhandledRejection", (err) => {
-    const msg = String(err?.message ?? err) + " " + String(err?.cause?.message ?? "") + " " + String(err?.cause?.code ?? "");
-    console.error("⚠️ Ошибка: " + msg);
-    if (/ETIMEDOUT|ECONNRESET|ECONNREFUSED|EPIPE|fetch failed|socket|not valid JSON|Unexpected token/i.test(msg)) {
-        console.log("🔄 Сетевой или JSON сбой — перезапускаю бота (Render поднимет заново)…");
-        process.exit(1);
+http.createServer(async (req, res) => {
+    const path = new URL(req.url || "/", "http://localhost").pathname;
+    if (path === "/health") {
+        await checkMaxApi();
+        const maxAvailable = lastMaxOkAt > 0 && Date.now() - lastMaxOkAt < 7 * 60_000;
+        const ready = pollingActive() && maxAvailable;
+        res.writeHead(ready ? 200 : 503, {
+            "Content-Type": "application/json; charset=utf-8",
+            "Cache-Control": "no-store"
+        });
+        res.end(JSON.stringify({
+            status: ready ? "ok" : "unhealthy",
+            polling: pollingActive(),
+            max_api: maxAvailable,
+            uptime_seconds: Math.floor((Date.now() - BOOT_AT) / 1000)
+        }));
+        return;
     }
+    if (path !== "/") {
+        res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+        return res.end("Не найдено");
+    }
+    res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Барахолка «У соседа» работает! ✅");
+}).listen(port, () => console.log("🌐 Веб-сервер запущен на порту " + port));
+
+// ── ЗАЩИТА ОТ ОСТАНОВКИ MAX LONG POLLING ───────────────────
+// Библиотека 0.3.1 умеет повторять сетевые запросы. Если её polling
+// остановился целиком, Node остаётся живым: watchdog перезапускает процесс,
+// который Render затем поднимает автоматически.
+let pollingStoppedTicks = 0;
+let restarting = false;
+function restartProcess(reason) {
+    if (restarting) return;
+    restarting = true;
+    console.error("🔄 Контролируемый перезапуск: " + reason);
+    void notifyAdmin("⚠️ BaraholkaBot перезапускается: " + reason)
+        .finally(() => process.exit(1));
+    setTimeout(() => process.exit(1), 10_000).unref();
+}
+setInterval(() => {
+    if (Date.now() - BOOT_AT < 120_000) return;
+    if (pollingActive()) {
+        pollingStoppedTicks = 0;
+        return;
+    }
+    pollingStoppedTicks += 1;
+    console.warn("⚠️ Polling MAX остановлен: контроль " + pollingStoppedTicks + "/2");
+    if (pollingStoppedTicks >= 2) restartProcess("неактивный приём событий MAX");
+}, 60_000).unref();
+
+process.on("unhandledRejection", (err) => {
+    const msg = String(err?.message || err);
+    console.error("⚠️ Необработанная ошибка: " + msg);
+    alertAdminOnError(msg);
+    // Единичные сетевые ошибки теперь обрабатывает SDK (retry/backoff).
+    // Watchdog перезапускает процесс, только если приём событий остановился.
 });
 
-console.log("🚀 Барахолка «У соседа» (Бояркино) v5 запускается… Будильник: ОТКЛЮЧЁН");
-bot.start();
+console.log("🚀 BaraholkaBot запускается: MAX SDK polling + контроль здоровья + оповещения.");
+void bot.start({ mode: "polling", options: { retry: true } }).then(() => {
+    console.warn("⚠️ MAX polling неожиданно завершился.");
+}).catch(error => {
+    console.error("❌ Не удалось запустить MAX polling:", error?.message || error);
+    restartProcess("ошибка запуска MAX polling");
+});
+// Уведомление отправляется только после подтверждения работоспособности API.
+setTimeout(async () => {
+    const ok = await checkMaxApi();
+    if (ok && pollingActive()) {
+        console.log("✅ Проверка MAX API и polling пройдена.");
+        await notifyAdmin("✅ BaraholkaBot запущен и подключён к MAX. Контроль здоровья работает.");
+    }
+}, 20_000).unref();
